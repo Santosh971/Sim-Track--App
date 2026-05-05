@@ -15,6 +15,8 @@ export interface NativeCallLog {
   timestamp: number;
   duration: number;
   contactName: string | null;
+  phoneAccountId?: string;
+  simSlotIndex?: number;
 }
 
 /**
@@ -23,6 +25,18 @@ export interface NativeCallLog {
 export interface PermissionStatus {
   readCallLog: boolean;
   readPhoneState: boolean;
+  readPhoneNumbers?: boolean;
+  readSms?: boolean;
+}
+
+/**
+ * Call log counts by type
+ */
+export interface CallLogCounts {
+  total: number;
+  incoming: number;
+  outgoing: number;
+  missed: number;
 }
 
 /**
@@ -42,7 +56,7 @@ interface CallLogModuleInterface {
   /**
    * Get call logs from device
    * @param lastSyncTimestamp - Optional timestamp to filter logs after this time
-   * @returns Array of call logs
+   * @returns Array of call logs with SIM slot information
    */
   getCallLogs(lastSyncTimestamp?: number): Promise<NativeCallLog[]>;
 
@@ -52,6 +66,23 @@ interface CallLogModuleInterface {
    * @returns Phone number or null if not available
    */
   getDevicePhoneNumber(): Promise<string | null>;
+
+  /**
+   * Get all SIM phone numbers
+   * Requires READ_PHONE_NUMBERS permission
+   * @returns Array of phone numbers per SIM slot
+   */
+  getAllSIMPhoneNumbers(): Promise<(string | null)[]>;
+
+  /**
+   * Get total call log count
+   */
+  getCallLogCount(): Promise<number>;
+
+  /**
+   * Get call log counts by type (total, incoming, outgoing, missed)
+   */
+  getCallLogCounts(): Promise<CallLogCounts>;
 }
 
 // Get the native module

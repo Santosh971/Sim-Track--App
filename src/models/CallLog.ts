@@ -8,6 +8,8 @@ export interface DeviceCallLog {
   timestamp: number;
   duration: number;
   contactName: string | null;
+  phoneAccountId?: string;
+  simSlotIndex?: number;
 }
 
 /**

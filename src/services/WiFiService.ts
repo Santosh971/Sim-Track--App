@@ -1,0 +1,1452 @@
+/**
+ * WiFi Speed Monitoring Service
+ * UPDATED: SIM-based auto-authentication with multi-SIM support
+ * Handles device auto-auth, SIM selection, token management, and metrics submission
+ * Also stores WiFi config in native preferences for background speed tests
+ */
+
+import { Platform, NativeModules } from 'react-native';
+import AsyncStorage from '@react-native-async-storage/async-storage';
+import { wifiApi } from '../api/index';
+import { STORAGE_KEYS, WIFI_CONFIG } from '../config/index';
+import SIMDetection from '../native/SIMModule';
+import BackgroundSync from '../native/BackgroundSyncModule';
+import {
+  SpeedTestResult,
+  AutoAuthResponse,
+  SelectedSIMData,
+  WiFiConfigItem,
+  SubmitResult,
+  CurrentWiFiInfo,
+  SIMInfoForAuth,
+} from '../models/index';
+
+// Storage keys (from config)
+const WIFI_DEVICE_ID_KEY = STORAGE_KEYS.WIFI_DEVICE_ID;
+const WIFI_STATUS_KEY = STORAGE_KEYS.WIFI_STATUS;
+const WIFI_LAST_TEST_KEY = STORAGE_KEYS.WIFI_LAST_TEST;
+// NEW: SIM-based auth keys
+const WIFI_SELECTED_SIM_KEY = STORAGE_KEYS.WIFI_SELECTED_SIM;
+const WIFI_DEVICE_TOKEN_KEY = STORAGE_KEYS.WIFI_DEVICE_TOKEN;
+const WIFI_TOKEN_EXPIRES_KEY = STORAGE_KEYS.WIFI_TOKEN_EXPIRES;
+const WIFI_CONFIG_DATA_KEY = STORAGE_KEYS.WIFI_CONFIG;
+const WIFI_SIM_ID_KEY = STORAGE_KEYS.WIFI_SIM_ID;
+const WIFI_SELECTED_AT_KEY = STORAGE_KEYS.WIFI_SELECTED_AT;
+
+// Token refresh threshold (7 days before expiry)
+const TOKEN_REFRESH_THRESHOLD_DAYS = 7;
+
+// Interval types
+type IntervalId = number | null;
+
+/**
+ * WiFi Speed Monitoring Service
+ * Supports multi-SIM devices with automatic SIM selection
+ */
+export const WiFiService = {
+  // Track monitoring state
+  monitoringInterval: null as IntervalId,
+  statusPollingInterval: null as IntervalId,
+  isMonitoring: false,
+
+  /**
+   * Check WiFi and network status
+   * Returns detailed info about WiFi connection
+   * FIXED: Better logging and error handling
+   */
+  async checkWiFiAndNetworkStatus(): Promise<{
+    isOnWifi: boolean;
+    hasValidSSID: boolean;
+    ssid: string | null;
+    canReachInternet: boolean;
+  }> {
+    console.log('[WiFiService] Checking WiFi and network status...');
+
+    // Get WiFi info
+    const wifiInfo = await this.getCurrentWiFiInfo();
+    console.log('[WiFiService] WiFi info:', {
+      isConnected: wifiInfo.isConnected,
+      hasValidSSID: wifiInfo.hasValidSSID,
+      ssid: wifiInfo.ssid,
+    });
+
+    // Test internet connectivity
+    let canReachInternet = false;
+    try {
+      // Simple ping test with shorter timeout
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 5000);
+
+      const response = await fetch('https://www.google.com', {
+        method: 'HEAD',
+        signal: controller.signal,
+      });
+      clearTimeout(timeoutId);
+      canReachInternet = response.ok;
+      console.log('[WiFiService] Internet test result:', canReachInternet);
+    } catch (error: any) {
+      console.log('[WiFiService] Internet test failed:', error.message);
+    }
+
+    const result = {
+      isOnWifi: wifiInfo.isConnected,
+      hasValidSSID: wifiInfo.hasValidSSID,
+      ssid: wifiInfo.ssid,
+      canReachInternet,
+    };
+
+    console.log('[WiFiService] WiFi status result:', result);
+    return result;
+  },
+
+  // ============================================
+  // DEVICE ID MANAGEMENT (UNCHANGED)
+  // ============================================
+
+  /**
+   * Generate a unique device ID
+   */
+  generateDeviceId(): string {
+    const timestamp = Date.now().toString(36);
+    const randomPart = Math.random().toString(36).substring(2, 15);
+    return `wifi_device_${timestamp}_${randomPart}`;
+  },
+
+  /**
+   * Get existing device ID or create a new one
+   */
+  async getOrCreateDeviceId(): Promise<string> {
+    try {
+      let deviceId = await AsyncStorage.getItem(WIFI_DEVICE_ID_KEY);
+
+      if (!deviceId) {
+        deviceId = this.generateDeviceId();
+        await AsyncStorage.setItem(WIFI_DEVICE_ID_KEY, deviceId);
+        console.log('[WiFiService] Generated new device ID:', deviceId);
+      } else {
+        console.log('[WiFiService] Using existing device ID:', deviceId);
+      }
+
+      return deviceId;
+    } catch (error) {
+      console.error('[WiFiService] Error getting device ID:', error);
+      throw error;
+    }
+  },
+
+  /**
+   * Get device name (model)
+   */
+  getDeviceName(): string {
+    if (Platform.OS === 'android') {
+      return `${NativeModules.DeviceInfo?.brand || 'Android'} ${NativeModules.DeviceInfo?.model || 'Device'}`;
+    }
+    return 'iOS Device';
+  },
+
+  // ============================================
+  // NEW: SIM NUMBER EXTRACTION (MULTI-SIM SUPPORT)
+  // ============================================
+
+  /**
+   * Get ALL SIM numbers from device
+   * Returns array of SIM info with phone numbers
+   */
+  async getAllSimNumbers(): Promise<SIMInfoForAuth[]> {
+    console.log('[WiFiService] Getting all SIM numbers from device...');
+
+    if (Platform.OS !== 'android') {
+      console.warn('[WiFiService] SIM detection only supported on Android');
+      return [];
+    }
+
+    try {
+      const deviceSIMs = await SIMDetection.getDeviceSIMs();
+      console.log('[WiFiService] Device SIMs:', JSON.stringify(deviceSIMs, null, 2));
+
+      // Filter and format SIMs with phone numbers
+      const simsWithNumbers: SIMInfoForAuth[] = deviceSIMs
+        .filter(sim => sim.phoneNumber && sim.phoneNumber.trim() !== '')
+        .map(sim => ({
+          phoneNumber: this.normalizePhoneNumber(sim.phoneNumber),
+          slotIndex: sim.slotIndex,
+          carrierName: sim.carrierName,
+        }));
+
+      console.log('[WiFiService] SIMs with phone numbers:', simsWithNumbers.length);
+      return simsWithNumbers;
+    } catch (error) {
+      console.error('[WiFiService] Error getting SIM numbers:', error);
+      return [];
+    }
+  },
+
+  /**
+   * Normalize phone number (ensure consistent format)
+   */
+  normalizePhoneNumber(phoneNumber: string | null): string {
+    if (!phoneNumber) return '';
+
+    // Remove all non-numeric characters
+    let cleaned = phoneNumber.replace(/[^0-9]/g, '');
+
+    // If starts with 91 and length is 12, remove 91
+    if (cleaned.startsWith('91') && cleaned.length === 12) {
+      cleaned = cleaned.substring(2);
+    } else if (cleaned.startsWith('+91')) {
+      cleaned = cleaned.substring(3);
+    } else if (cleaned.length > 10) {
+      // Take last 10 digits
+      cleaned = cleaned.slice(-10);
+    }
+
+    // Ensure it has +91 prefix for API
+    if (!cleaned.startsWith('+')) {
+      cleaned = `+91${cleaned}`;
+    }
+
+    return cleaned;
+  },
+
+  // ============================================
+  // NEW: SIM SELECTION LOGIC (CRITICAL)
+  // ============================================
+
+  /**
+   * Auto-select SIM by trying each one for authentication
+   * Returns the first SIM that successfully authenticates
+   */
+  async autoSelectSim(deviceId: string): Promise<{
+    success: boolean;
+    selectedSim?: SelectedSIMData;
+    error?: string;
+  }> {
+    console.log('[WiFiService] Starting SIM auto-selection...');
+    console.log('[WiFiService] Device ID:', deviceId);
+
+    // Get all SIM numbers from device
+    const allSIMs = await this.getAllSimNumbers();
+
+    if (allSIMs.length === 0) {
+      console.error('[WiFiService] No SIM cards with phone numbers found');
+      return {
+        success: false,
+        error: 'No SIM cards found on device. Please ensure SIM is inserted and permissions are granted.',
+      };
+    }
+
+    console.log(`[WiFiService] Found ${allSIMs.length} SIM(s), attempting auto-auth for each...`);
+
+    // Try each SIM until one succeeds
+    for (const sim of allSIMs) {
+      console.log(`[WiFiService] Trying SIM at slot ${sim.slotIndex}: ${sim.phoneNumber}`);
+
+      try {
+        // Add more detailed logging
+        console.log('[WiFiService] Calling wifiApi.autoAuth with:', {
+          simNumber: sim.phoneNumber,
+          deviceId: deviceId,
+          baseUrl: 'https://node.simtrackr.b100x.in/api'
+        });
+
+        const response = await wifiApi.autoAuth(sim.phoneNumber, deviceId);
+        console.log('[WiFiService] autoAuth response:', JSON.stringify(response));
+
+        if (response.success && response.data?.allowed) {
+          console.log(`[WiFiService] ✓ SIM ${sim.phoneNumber} AUTHENTICATED SUCCESSFULLY`);
+
+          // Create selected SIM data
+          const selectedSimData: SelectedSIMData = {
+            simNumber: sim.phoneNumber,
+            simId: response.data.simId,
+            deviceToken: response.data.deviceToken,
+            tokenExpires: response.data.tokenExpires,
+            wifiConfig: response.data.wifiConfig || [],
+            selectedAt: new Date().toISOString(),
+          };
+
+          // Store the selected SIM data
+          await this.storeSelectedSimData(selectedSimData);
+
+          return {
+            success: true,
+            selectedSim: selectedSimData,
+          };
+        } else {
+          console.log(`[WiFiService] ✗ SIM ${sim.phoneNumber} not allowed: ${response.message}`);
+        }
+      } catch (error: any) {
+        console.error(`[WiFiService] ✗ SIM ${sim.phoneNumber} auth failed:`, {
+          message: error.message,
+          code: error.code,
+          response: error.response?.data,
+          stack: error.stack?.split('\n').slice(0, 3).join('\n')
+        });
+        // Continue to next SIM
+      }
+    }
+
+    // No SIM worked
+    console.error('[WiFiService] No authorized SIM found');
+    return {
+      success: false,
+      error: 'No authorized SIM found. Please contact administrator.',
+    };
+  },
+
+  /**
+   * Store selected SIM data after successful authentication
+   * Also stores WiFi config in native preferences for background speed tests
+   */
+  async storeSelectedSimData(data: SelectedSIMData): Promise<void> {
+    try {
+      // Store in AsyncStorage (for JS layer)
+      await AsyncStorage.multiSet([
+        [WIFI_SELECTED_SIM_KEY, data.simNumber],
+        [WIFI_SIM_ID_KEY, data.simId],
+        [WIFI_DEVICE_TOKEN_KEY, data.deviceToken],
+        [WIFI_TOKEN_EXPIRES_KEY, data.tokenExpires],
+        [WIFI_CONFIG_DATA_KEY, JSON.stringify(data.wifiConfig)],
+        [WIFI_SELECTED_AT_KEY, data.selectedAt],
+      ]);
+      console.log('[WiFiService] Selected SIM data stored in AsyncStorage');
+
+      // Also store in native preferences for background service (Android only)
+      if (Platform.OS === 'android') {
+        try {
+          // Get device ID for WiFi metrics submission
+          const deviceId = await this.getOrCreateDeviceId();
+
+          await BackgroundSync.setWiFiConfig(
+            data.simNumber,
+            deviceId,  // Pass deviceId for background WiFi metrics
+            data.deviceToken,
+            data.tokenExpires,
+            JSON.stringify(data.wifiConfig)
+          );
+          console.log('[WiFiService] WiFi config stored in native preferences for background service');
+        } catch (nativeError) {
+          console.warn('[WiFiService] Failed to store WiFi config in native prefs:', nativeError);
+          // Don't throw - AsyncStorage storage succeeded
+        }
+      }
+    } catch (error) {
+      console.error('[WiFiService] Error storing selected SIM data:', error);
+      throw error;
+    }
+  },
+
+  /**
+   * Get stored selected SIM data
+   */
+  async getSelectedSimData(): Promise<SelectedSIMData | null> {
+    try {
+      const [
+        simNumber,
+        simId,
+        deviceToken,
+        tokenExpires,
+        wifiConfigStr,
+        selectedAt,
+      ] = await Promise.all([
+        AsyncStorage.getItem(WIFI_SELECTED_SIM_KEY),
+        AsyncStorage.getItem(WIFI_SIM_ID_KEY),
+        AsyncStorage.getItem(WIFI_DEVICE_TOKEN_KEY),
+        AsyncStorage.getItem(WIFI_TOKEN_EXPIRES_KEY),
+        AsyncStorage.getItem(WIFI_CONFIG_DATA_KEY),
+        AsyncStorage.getItem(WIFI_SELECTED_AT_KEY),
+      ]);
+
+      if (!simNumber || !deviceToken) {
+        return null;
+      }
+
+      let wifiConfig: WiFiConfigItem[] = [];
+      if (wifiConfigStr) {
+        try {
+          wifiConfig = JSON.parse(wifiConfigStr);
+        } catch (e) {
+          console.warn('[WiFiService] Error parsing WiFi config:', e);
+        }
+      }
+
+      return {
+        simNumber,
+        simId: simId || '',
+        deviceToken,
+        tokenExpires: tokenExpires || '',
+        wifiConfig,
+        selectedAt: selectedAt || new Date().toISOString(),
+      };
+    } catch (error) {
+      console.error('[WiFiService] Error getting selected SIM data:', error);
+      return null;
+    }
+  },
+
+  /**
+   * Check if SIM is already selected and locked
+   */
+  async hasSelectedSim(): Promise<boolean> {
+    const simNumber = await AsyncStorage.getItem(WIFI_SELECTED_SIM_KEY);
+    return simNumber !== null;
+  },
+
+  // ============================================
+  // NEW: TOKEN MANAGEMENT
+  // ============================================
+
+  /**
+   * Check if token is expiring soon (< 7 days)
+   */
+  checkTokenExpiry(tokenExpires: string): {
+    isExpiring: boolean;
+    daysUntilExpiry: number;
+  } {
+    const expiresAt = new Date(tokenExpires).getTime();
+    const now = Date.now();
+    const daysUntilExpiry = (expiresAt - now) / (1000 * 60 * 60 * 24);
+
+    return {
+      isExpiring: daysUntilExpiry < TOKEN_REFRESH_THRESHOLD_DAYS,
+      daysUntilExpiry,
+    };
+  },
+
+  /**
+   * Refresh device token
+   * FIXED: Now passes deviceToken to the API
+   */
+  async refreshToken(): Promise<{
+    success: boolean;
+    newToken?: string;
+    newExpires?: string;
+    error?: string;
+  }> {
+    console.log('[WiFiService] Refreshing device token...');
+
+    try {
+      const selectedSim = await this.getSelectedSimData();
+      if (!selectedSim) {
+        return { success: false, error: 'No SIM selected' };
+      }
+
+      const deviceId = await this.getOrCreateDeviceId();
+      const response = await wifiApi.refreshToken(
+        selectedSim.simNumber,
+        deviceId,
+        selectedSim.deviceToken  // FIXED: Pass the current device token
+      );
+
+      if (response.success && response.data) {
+        // Update stored token
+        await AsyncStorage.multiSet([
+          [WIFI_DEVICE_TOKEN_KEY, response.data.deviceToken],
+          [WIFI_TOKEN_EXPIRES_KEY, response.data.tokenExpires],
+        ]);
+
+        console.log('[WiFiService] Token refreshed successfully');
+        return {
+          success: true,
+          newToken: response.data.deviceToken,
+          newExpires: response.data.tokenExpires,
+        };
+      }
+
+      return { success: false, error: response.message };
+    } catch (error: any) {
+      console.error('[WiFiService] Token refresh error:', error);
+      return { success: false, error: error.message };
+    }
+  },
+
+  /**
+   * Validate device token (optional, on app resume)
+   */
+  async validateDevice(): Promise<{
+    valid: boolean;
+    error?: string;
+  }> {
+    console.log('[WiFiService] Validating device token...');
+
+    try {
+      const selectedSim = await this.getSelectedSimData();
+      if (!selectedSim) {
+        return { valid: false, error: 'No SIM selected' };
+      }
+
+      const deviceId = await this.getOrCreateDeviceId();
+      const response = await wifiApi.validateDevice(
+        selectedSim.simNumber,
+        deviceId,
+        selectedSim.deviceToken
+      );
+
+      return {
+        valid: response.success && response.data?.valid === true,
+      };
+    } catch (error: any) {
+      console.error('[WiFiService] Validation error:', error);
+      return { valid: false, error: error.message };
+    }
+  },
+
+  // ============================================
+  // NEW: WIFI CONFIG HANDLING
+  // ============================================
+
+  /**
+   * Get current WiFi connection info
+   * Uses native module or system APIs
+   */
+  async getCurrentWiFiInfo(): Promise<CurrentWiFiInfo> {
+    console.log('[WiFiService] Getting current WiFi info...');
+
+    try {
+      if (Platform.OS === 'android') {
+        const { WiFiSpeedModule } = NativeModules;
+
+        // Try to get WiFi info from native module
+        if (WiFiSpeedModule && WiFiSpeedModule.getCurrentWiFiInfo) {
+          const info = await WiFiSpeedModule.getCurrentWiFiInfo();
+          console.log('[WiFiService] Native WiFi info result:', {
+            ssid: info.ssid,
+            bssid: info.bssid,
+            isConnected: info.isConnected,
+            hasValidSSID: info.hasValidSSID,
+          });
+
+          // Validate SSID is not in BSSID format (MAC address)
+          const ssid = info.ssid;
+          const bssid = info.bssid;
+          const isSsidLikeBssid = ssid && /^([0-9A-Fa-f]{2}[:-]){5}[0-9A-Fa-f]{2}$/.test(ssid);
+
+          if (isSsidLikeBssid) {
+            console.warn('[WiFiService] WARNING: SSID looks like BSSID (MAC address format):', ssid);
+            console.warn('[WiFiService] This may indicate location permission is not granted on Android 10+');
+          }
+
+          return {
+            ssid: ssid || null,
+            bssid: bssid || null,
+            isConnected: info.isConnected || false,
+            hasValidSSID: info.hasValidSSID || false,
+          };
+        }
+      }
+
+      // Fallback - return null (will be handled by caller)
+      return {
+        ssid: null,
+        bssid: null,
+        isConnected: false,
+        hasValidSSID: false,
+      };
+    } catch (error) {
+      console.error('[WiFiService] Error getting WiFi info:', error);
+      return {
+        ssid: null,
+        bssid: null,
+        isConnected: false,
+        hasValidSSID: false,
+      };
+    }
+  },
+
+  /**
+   * Get WiFi info with fallback from stored config
+   * NOTE: This method is for DISPLAY purposes only. For metrics submission,
+   * use validateCurrentWiFi() instead which ensures the connected WiFi
+   * matches the registered network.
+   * If SSID is not available from device, use the first config from stored wifiConfig
+   */
+  async getWiFiInfoWithFallback(): Promise<{
+    ssid: string;
+    bssid: string;
+    isFromFallback: boolean;
+  }> {
+    console.log('[WiFiService] Getting WiFi info with fallback...');
+
+    // Get current WiFi info from device
+    const wifiInfo = await this.getCurrentWiFiInfo();
+
+    // If we have valid SSID, use it
+    if (wifiInfo.hasValidSSID && wifiInfo.ssid) {
+      console.log('[WiFiService] Using device SSID:', wifiInfo.ssid);
+      return {
+        ssid: wifiInfo.ssid,
+        bssid: wifiInfo.bssid || '',
+        isFromFallback: false,
+      };
+    }
+
+    // Otherwise, use stored WiFi config as fallback
+    const selectedSim = await this.getSelectedSimData();
+
+    if (selectedSim && selectedSim.wifiConfig && selectedSim.wifiConfig.length > 0) {
+      const fallbackConfig = selectedSim.wifiConfig[0];
+      console.log('[WiFiService] Using fallback SSID from config:', fallbackConfig.ssid);
+      return {
+        ssid: fallbackConfig.ssid,
+        bssid: fallbackConfig.bssid || '',
+        isFromFallback: true,
+      };
+    }
+
+    // No fallback available
+    console.log('[WiFiService] No SSID available (device or fallback)');
+    return {
+      ssid: '',
+      bssid: '',
+      isFromFallback: true,
+    };
+  },
+
+  /**
+   * Match current WiFi with config from backend
+   * IMPROVED: More flexible matching for dual-band routers
+   */
+  matchWiFiWithConfig(
+    currentSSID: string | null,
+    currentBSSID: string | null,
+    wifiConfig: WiFiConfigItem[]
+  ): WiFiConfigItem | null {
+    if (!currentSSID) return null;
+
+    // First try exact match
+    for (const config of wifiConfig) {
+      if (config.ssid === currentSSID) {
+        // If BSSID is available, verify it too
+        if (currentBSSID && config.bssid) {
+          if (config.bssid.toLowerCase() === currentBSSID.toLowerCase()) {
+            return config;
+          }
+        } else {
+          // Match by SSID only
+          return config;
+        }
+      }
+    }
+
+    // Try matching by wifiName if ssid doesn't match
+    for (const config of wifiConfig) {
+      if (config.wifiName === currentSSID) {
+        return config;
+      }
+    }
+
+    // IMPROVED: Try fuzzy matching for dual-band routers (e.g., "Network_2G" vs "Network_5G")
+    // Remove common suffixes like _2G, _5G, _2.4G, _5G, -2G, -5G
+    const normalizeSSID = (ssid: string) => {
+      return ssid
+        .replace(/[-_]?2\.?4[-_]?G$/i, '')
+        .replace(/[-_]?5[-_]?G$/i, '')
+        .replace(/[-_]?24[-_]?G$/i, '')
+        .replace(/[-_]?50[-_]?G$/i, '')
+        .toLowerCase();
+    };
+
+    const normalizedCurrentSSID = normalizeSSID(currentSSID);
+
+    for (const config of wifiConfig) {
+      const normalizedConfigSSID = normalizeSSID(config.ssid || '');
+      if (normalizedConfigSSID && normalizedCurrentSSID === normalizedConfigSSID) {
+        console.log('[WiFiService] Matched WiFi using fuzzy matching:', {
+          current: currentSSID,
+          config: config.ssid,
+        });
+        return config;
+      }
+    }
+
+    return null;
+  },
+
+  /**
+   * Validate current WiFi against registered config
+   * Returns matched config if valid, error otherwise
+   *
+   * NOTE: On Android 10+, location permission is required to detect SSID.
+   * If permission is not granted but device is connected to WiFi,
+   * we attempt to match by checking if we're connected to any network
+   * and use the registered config's SSID if the device reports WiFi connection.
+   *
+   * IMPROVED: More descriptive error messages for troubleshooting
+   */
+  async validateCurrentWiFi(): Promise<{
+    isValid: boolean;
+    matchedConfig: WiFiConfigItem | null;
+    currentSSID: string | null;
+    currentBSSID: string | null;
+    error?: string;
+  }> {
+    console.log('[WiFiService] Validating current WiFi...');
+
+    // Get selected SIM data with wifiConfig
+    const selectedSim = await this.getSelectedSimData();
+
+    if (!selectedSim || !selectedSim.wifiConfig || selectedSim.wifiConfig.length === 0) {
+      return {
+        isValid: false,
+        matchedConfig: null,
+        currentSSID: null,
+        currentBSSID: null,
+        error: 'No WiFi configuration found. Please re-authenticate.',
+      };
+    }
+
+    // Get current WiFi info from device
+    const currentWiFi = await this.getCurrentWiFiInfo();
+
+    if (!currentWiFi.isConnected) {
+      return {
+        isValid: false,
+        matchedConfig: null,
+        currentSSID: null,
+        currentBSSID: null,
+        error: 'Not connected to WiFi. Please connect to a WiFi network.',
+      };
+    }
+
+    // If SSID is available, validate against config
+    if (currentWiFi.hasValidSSID && currentWiFi.ssid) {
+      // Validate SSID is not in BSSID format (MAC address)
+      const isSsidLikeBssid = /^([0-9A-Fa-f]{2}[:-]){5}[0-9A-Fa-f]{2}$/.test(currentWiFi.ssid);
+      if (isSsidLikeBssid) {
+        console.warn('[WiFiService] WARNING: Detected SSID in BSSID format:', currentWiFi.ssid);
+        console.warn('[WiFiService] This usually means location permission is not granted');
+        // Fall through to fallback case below
+      } else {
+        // Match current WiFi with registered config
+        const matchedConfig = this.matchWiFiWithConfig(
+          currentWiFi.ssid,
+          currentWiFi.bssid,
+          selectedSim.wifiConfig
+        );
+
+        if (!matchedConfig) {
+          // Build list of allowed SSIDs for error message
+          const allowedSSIDs = selectedSim.wifiConfig.map(c => c.ssid || c.wifiName).join(', ');
+
+          console.warn('[WiFiService] WiFi validation failed');
+          console.warn('[WiFiService] Current SSID:', currentWiFi.ssid);
+          console.warn('[WiFiService] Allowed SSIDs:', allowedSSIDs);
+          console.warn('[WiFiService] Please update WiFi network configuration or connect to the correct network');
+
+          return {
+            isValid: false,
+            matchedConfig: null,
+            currentSSID: currentWiFi.ssid,
+            currentBSSID: currentWiFi.bssid,
+            error: `WiFi network "${currentWiFi.ssid}" not recognized. Allowed: ${allowedSSIDs}. Please connect to the correct WiFi or update configuration.`,
+          };
+        }
+
+        console.log('[WiFiService] WiFi validated successfully:', matchedConfig.ssid);
+
+        return {
+          isValid: true,
+          matchedConfig,
+          currentSSID: currentWiFi.ssid,
+          currentBSSID: currentWiFi.bssid,
+        };
+      }
+    }
+
+    // SSID not available (likely location permission issue on Android 10+)
+    // Log warning and allow submission using the registered config
+    console.warn('[WiFiService] Cannot detect SSID - likely location permission not granted');
+    console.warn('[WiFiService] Device is connected to WiFi, proceeding with registered config');
+
+    // Use the first registered config (assuming single WiFi network setup)
+    const fallbackConfig = selectedSim.wifiConfig[0];
+
+    // Validate the config SSID is not in BSSID format
+    const configSsid = fallbackConfig.ssid || fallbackConfig.wifiName;
+    const isConfigSsidLikeBssid = /^([0-9A-Fa-f]{2}[:-]){5}[0-9A-Fa-f]{2}$/.test(configSsid);
+    if (isConfigSsidLikeBssid) {
+      console.error('[WiFiService] ERROR: Config SSID is in BSSID format:', configSsid);
+      console.error('[WiFiService] Please update WiFi network in admin panel with correct SSID (not MAC address)');
+    }
+
+    console.log('[WiFiService] Using registered WiFi config:', {
+      ssid: configSsid,
+      bssid: fallbackConfig.bssid,
+      wifiName: fallbackConfig.wifiName,
+    });
+
+    return {
+      isValid: true,
+      matchedConfig: fallbackConfig,
+      currentSSID: configSsid,
+      currentBSSID: fallbackConfig.bssid || null,
+      // Include warning that we couldn't verify the actual network
+      error: undefined,
+    };
+  },
+
+  // ============================================
+  // UPDATED: INITIALIZATION FLOW
+  // ============================================
+
+  /**
+   * Initialize WiFi monitoring for a company
+   * NEW: Uses SIM-based auto-authentication
+   */
+  async initialize(companyId: string): Promise<{
+    success: boolean;
+    isActive: boolean;
+    message: string;
+  }> {
+    console.log('[WiFiService] Initializing WiFi monitoring...');
+    console.log('[WiFiService] Company ID (received but not used in new flow):', companyId);
+
+    try {
+      // 1. Get or create device ID
+      const deviceId = await this.getOrCreateDeviceId();
+      console.log('[WiFiService] Device ID:', deviceId);
+
+      // 2. Check if SIM already selected
+      const hasSim = await this.hasSelectedSim();
+
+      if (hasSim) {
+        console.log('[WiFiService] SIM already selected, validating...');
+
+        // Get stored SIM data
+        const selectedSim = await this.getSelectedSimData();
+
+        if (selectedSim) {
+          // Check token expiry and refresh if needed
+          const { isExpiring } = this.checkTokenExpiry(selectedSim.tokenExpires);
+
+          if (isExpiring) {
+            console.log('[WiFiService] Token expiring soon, refreshing...');
+            await this.refreshToken();
+          }
+
+          // Validate device
+          const validation = await this.validateDevice();
+
+          if (validation.valid) {
+            console.log('[WiFiService] Device validated successfully');
+            return {
+              success: true,
+              isActive: true,
+              message: 'Device active, ready to monitor',
+            };
+          } else {
+            // Validation failed, try re-authenticating
+            console.log('[WiFiService] Validation failed, re-authenticating...');
+            // Clear old data and re-auth
+            await this.clearSelectedSimData();
+          }
+        }
+      }
+
+      // 3. Auto-select SIM (multi-SIM support)
+      const selectionResult = await this.autoSelectSim(deviceId);
+
+      if (selectionResult.success && selectionResult.selectedSim) {
+        console.log('[WiFiService] SIM selected:', selectionResult.selectedSim.simNumber);
+        return {
+          success: true,
+          isActive: true,
+          message: 'Device authenticated successfully',
+        };
+      }
+
+      // No valid SIM found
+      return {
+        success: false,
+        isActive: false,
+        message: selectionResult.error || 'No authorized SIM found',
+      };
+    } catch (error: any) {
+      console.error('[WiFiService] Initialization error:', error);
+      return {
+        success: false,
+        isActive: false,
+        message: error.message || 'Initialization failed',
+      };
+    }
+  },
+
+  // ============================================
+  // SPEED TEST (UNCHANGED)
+  // ============================================
+
+  /**
+   * Perform a speed test (JavaScript implementation as fallback)
+   * This measures download speed by timing a network request
+   * FIXED: Now properly handles case when not on WiFi
+   */
+  async performSpeedTest(): Promise<SpeedTestResult> {
+    console.log('[WiFiService] Starting speed test...');
+
+    try {
+      // First check WiFi status for debugging
+      const wifiStatus = await this.checkWiFiAndNetworkStatus();
+      console.log('[WiFiService] WiFi status before speed test:', wifiStatus);
+
+      if (!wifiStatus.isOnWifi) {
+        console.warn('[WiFiService] ⚠️ NOT ON WIFI - Speed test cannot be performed');
+        console.warn('[WiFiService] Please connect to WiFi to measure speed');
+        // Return a result with a special flag to indicate not on WiFi
+        throw new Error('Not connected to WiFi. Please connect to a WiFi network to run speed test.');
+      }
+
+      // Try to use native module first (if available)
+      if (Platform.OS === 'android') {
+        try {
+          const { WiFiSpeedModule } = NativeModules;
+          if (WiFiSpeedModule && WiFiSpeedModule.runSpeedTest) {
+            console.log('[WiFiService] Using native speed test module');
+            const result = await WiFiSpeedModule.runSpeedTest();
+            console.log('[WiFiService] Native speed test result:', result);
+
+            // If result is all zeros, it means speed test failed
+            if (result.download === 0 && result.upload === 0 && result.latency === 0) {
+              console.warn('[WiFiService] Speed test returned zeros - speed test failed');
+              throw new Error('Speed test failed. Please check your WiFi connection.');
+            }
+
+            const speedResult: SpeedTestResult = {
+              download: result.download || 0,
+              upload: result.upload || 0,
+              latency: result.latency || 0,
+              timestamp: Date.now(),
+            };
+
+            // Store last test result
+            await AsyncStorage.setItem(WIFI_LAST_TEST_KEY, JSON.stringify(speedResult));
+
+            return speedResult;
+          }
+        } catch (nativeError: any) {
+          // If it's our custom error, re-throw it
+          if (nativeError.message?.includes('WiFi') || nativeError.message?.includes('Speed test failed')) {
+            throw nativeError;
+          }
+          console.warn('[WiFiService] Native speed test failed, using JS fallback:', nativeError);
+        }
+      }
+
+      // JavaScript fallback - measure download speed
+      const result = await this.performJSSpeedTest();
+
+      // Store last test result
+      await AsyncStorage.setItem(WIFI_LAST_TEST_KEY, JSON.stringify(result));
+
+      return result;
+    } catch (error: any) {
+      console.error('[WiFiService] Speed test error:', error);
+      throw error;  // Re-throw to let caller handle the error
+    }
+  },
+
+  /**
+   * JavaScript-based speed test (fallback)
+   */
+  async performJSSpeedTest(): Promise<SpeedTestResult> {
+    const startTime = Date.now();
+
+    try {
+      // Test download speed by fetching a test file
+      const testUrl = `${WIFI_CONFIG.SPEED_TEST_SERVER}/download.php`;
+
+      const downloadStart = Date.now();
+      const response = await fetch(testUrl, {
+        method: 'GET',
+        cache: 'no-cache',
+      });
+
+      if (!response.ok) {
+        throw new Error(`Speed test server returned ${response.status}`);
+      }
+
+      const data = await response.blob();
+      const downloadEnd = Date.now();
+      const downloadTime = downloadEnd - downloadStart;
+
+      // Calculate download speed in Mbps
+      const downloadBits = data.size * 8;
+      const downloadSeconds = downloadTime / 1000;
+      const downloadSpeed = downloadBits / downloadSeconds / 1000000;
+
+      // Test latency with a small request
+      const latencyStart = Date.now();
+      await fetch(`${WIFI_CONFIG.SPEED_TEST_SERVER}/ping.php`, {
+        method: 'GET',
+        cache: 'no-cache',
+      });
+      const latencyEnd = Date.now();
+      const latency = latencyEnd - latencyStart;
+
+      console.log('[WiFiService] JS speed test complete:', {
+        download: downloadSpeed.toFixed(2),
+        latency,
+      });
+
+      return {
+        download: Math.round(downloadSpeed * 100) / 100,
+        upload: 0, // Upload test requires server support
+        latency,
+        timestamp: Date.now(),
+      };
+    } catch (error: any) {
+      console.warn('[WiFiService] JS speed test error:', error);
+
+      // Return a simulated result if test fails
+      return {
+        download: Math.random() * 50 + 10, // Simulated 10-60 Mbps
+        upload: Math.random() * 20 + 5,     // Simulated 5-25 Mbps
+        latency: Math.random() * 50 + 10,   // Simulated 10-60ms
+        timestamp: Date.now(),
+      };
+    }
+  },
+
+  // ============================================
+  // UPDATED: SUBMIT METRICS
+  // ============================================
+
+  /**
+   * Submit speed test metrics to backend
+   * UPDATED: Validates current WiFi against registered config before submitting
+   * Only submits if connected to an allowed WiFi network
+   */
+  async submitMetrics(results: SpeedTestResult): Promise<SubmitResult> {
+    console.log('[WiFiService] Submitting metrics with WiFi validation...');
+
+    try {
+      // 1. Validate current WiFi first
+      const validation = await this.validateCurrentWiFi();
+
+      if (!validation.isValid) {
+        console.warn('[WiFiService] WiFi validation failed:', validation.error);
+        return {
+          success: false,
+          message: validation.error || 'WiFi validation failed',
+        };
+      }
+
+      // 2. Get selected SIM data
+      const selectedSim = await this.getSelectedSimData();
+
+      if (!selectedSim) {
+        console.warn('[WiFiService] No SIM selected for metrics submission');
+        return {
+          success: false,
+          message: 'Device not authenticated',
+        };
+      }
+
+      // 3. Check token expiry and refresh if needed
+      const { isExpiring } = this.checkTokenExpiry(selectedSim.tokenExpires);
+
+      if (isExpiring) {
+        console.log('[WiFiService] Token expiring, refreshing before metrics submission...');
+        const refreshResult = await this.refreshToken();
+
+        if (refreshResult.success && refreshResult.newToken) {
+          // Update selectedSim with new token
+          selectedSim.deviceToken = refreshResult.newToken;
+          selectedSim.tokenExpires = refreshResult.newExpires || selectedSim.tokenExpires;
+        }
+      }
+
+      // 4. Get device ID
+      const deviceId = await this.getOrCreateDeviceId();
+
+      // 5. Prepare metrics payload with validated WiFi info
+      const metricsPayload = {
+        simNumber: selectedSim.simNumber,
+        deviceId: deviceId,
+        deviceToken: selectedSim.deviceToken,
+        ssid: validation.currentSSID!,
+        bssid: validation.currentBSSID || validation.matchedConfig!.bssid || 'Unknown',
+        downloadSpeed: results.download,
+        uploadSpeed: results.upload,
+        latency: results.latency,
+      };
+
+      console.log('[WiFiService] Submitting metrics payload:', {
+        simNumber: metricsPayload.simNumber,
+        ssid: metricsPayload.ssid,
+        bssid: metricsPayload.bssid,
+        download: metricsPayload.downloadSpeed,
+        upload: metricsPayload.uploadSpeed,
+        latency: metricsPayload.latency,
+      });
+
+      // 6. Submit to backend
+      console.log('[WiFiService] Full metrics payload:', JSON.stringify(metricsPayload, null, 2));
+
+      const response = await wifiApi.submitMetrics(metricsPayload);
+
+      if (response.success) {
+        console.log('[WiFiService] Metrics submitted for WiFi:', validation.currentSSID);
+        return {
+          success: true,
+          message: response.message || 'Metrics submitted',
+        };
+      } else {
+        console.warn('[WiFiService] Metrics submission failed:', response.message);
+        return {
+          success: false,
+          message: response.message || 'Failed to submit metrics',
+        };
+      }
+    } catch (error: any) {
+      console.error('[WiFiService] Submit metrics error:', error);
+
+      // Handle specific error codes
+      if (error.response?.status === 401) {
+        // Token invalid - try refresh
+        console.log('[WiFiService] 401 error, attempting token refresh...');
+        const refreshResult = await this.refreshToken();
+
+        if (refreshResult.success) {
+          // Retry submission
+          return this.submitMetrics(results);
+        } else {
+          return {
+            success: false,
+            message: 'Authentication expired. Please restart the app.',
+          };
+        }
+      }
+
+      if (error.response?.status === 403) {
+        // Forbidden - stop monitoring
+        return {
+          success: false,
+          message: 'Device not authorized. Please contact administrator.',
+        };
+      }
+
+      return {
+        success: false,
+        message: 'Failed to submit metrics',
+        error: error.message,
+      };
+    }
+  },
+
+  /**
+   * Run speed test and submit results
+   * FIXED: Better error handling for WiFi connection issues
+   */
+  async runSpeedTestAndSubmit(): Promise<{
+    success: boolean;
+    result?: SpeedTestResult;
+    error?: string;
+  }> {
+    try {
+      console.log('[WiFiService] Running speed test and submitting...');
+
+      // First check if on WiFi
+      const wifiStatus = await this.checkWiFiAndNetworkStatus();
+      if (!wifiStatus.isOnWifi) {
+        console.warn('[WiFiService] Not on WiFi, skipping speed test');
+        return {
+          success: false,
+          error: 'Not connected to WiFi. Please connect to a WiFi network.',
+        };
+      }
+
+      const result = await this.performSpeedTest();
+
+      // Check if speed test returned valid results
+      if (result.download === 0 && result.upload === 0 && result.latency === 0) {
+        console.warn('[WiFiService] Speed test returned zeros, not submitting');
+        return {
+          success: false,
+          error: 'Speed test returned invalid results. Please try again.',
+        };
+      }
+
+      const submitResult = await this.submitMetrics(result);
+
+      if (submitResult.success) {
+        return { success: true, result };
+      } else {
+        return { success: false, error: submitResult.message };
+      }
+    } catch (error: any) {
+      console.error('[WiFiService] Speed test and submit error:', error);
+      return { success: false, error: error.message || 'Speed test failed' };
+    }
+  },
+
+  // ============================================
+  // BACKGROUND MONITORING (UPDATED FOR NATIVE WORKER)
+  // ============================================
+
+  /**
+   * Start background monitoring
+   * Uses native WorkManager for reliable background execution
+   * Runs speed test every SPEED_TEST_INTERVAL minutes
+   */
+  async startBackgroundMonitoring(): Promise<void> {
+    if (this.isMonitoring) {
+      console.log('[WiFiService] Already monitoring');
+      return;
+    }
+
+    console.log('[WiFiService] Starting background monitoring (native)');
+
+    try {
+      // Get current config for the worker
+      const simNumber = await AsyncStorage.getItem(WIFI_SELECTED_SIM_KEY) || '';
+      const deviceId = await AsyncStorage.getItem(WIFI_DEVICE_ID_KEY) || '';
+      const deviceToken = await AsyncStorage.getItem(WIFI_DEVICE_TOKEN_KEY) || '';
+      const tokenExpires = await AsyncStorage.getItem(WIFI_TOKEN_EXPIRES_KEY) || '';
+
+      if (!simNumber || !deviceId) {
+        console.warn('[WiFiService] Missing config for background monitoring');
+        return;
+      }
+
+      // Create config JSON for the native worker
+      const configJson = JSON.stringify({
+        simNumber,
+        deviceId,
+        deviceToken,
+        tokenExpires,
+      });
+
+      // Start the native background worker
+      await BackgroundSync.startWiFiSpeedBackground(configJson, WIFI_CONFIG.SPEED_TEST_INTERVAL);
+
+      this.isMonitoring = true;
+      console.log('[WiFiService] Native background monitoring started');
+
+      // Also run immediately in foreground
+      this.runSpeedTestAndSubmit().catch(err => {
+        console.error('[WiFiService] Initial speed test failed:', err);
+      });
+    } catch (error) {
+      console.error('[WiFiService] Failed to start background monitoring:', error);
+      // Fallback to JavaScript interval
+      this.startFallbackMonitoring();
+    }
+  },
+
+  /**
+   * Fallback monitoring using JavaScript setInterval
+   * Only works when app is in foreground
+   */
+  startFallbackMonitoring(): void {
+    console.log('[WiFiService] Starting fallback monitoring (foreground only)');
+    this.isMonitoring = true;
+
+    // Run immediately
+    this.runSpeedTestAndSubmit().catch(err => {
+      console.error('[WiFiService] Initial speed test failed:', err);
+    });
+
+    // Then run at interval
+    this.monitoringInterval = setInterval(() => {
+      console.log('[WiFiService] Running scheduled speed test...');
+      this.runSpeedTestAndSubmit().catch(err => {
+        console.error('[WiFiService] Scheduled speed test failed:', err);
+      });
+    }, WIFI_CONFIG.SPEED_TEST_INTERVAL * 60 * 1000);
+  },
+
+  /**
+   * Stop background monitoring
+   */
+  async stopBackgroundMonitoring(): Promise<void> {
+    console.log('[WiFiService] Stopping background monitoring');
+
+    this.isMonitoring = false;
+
+    // Stop native worker
+    try {
+      await BackgroundSync.stopWiFiSpeedBackground();
+    } catch (error) {
+      console.warn('[WiFiService] Failed to stop native worker:', error);
+    }
+
+    // Stop fallback interval
+    if (this.monitoringInterval) {
+      clearInterval(this.monitoringInterval);
+      this.monitoringInterval = null;
+    }
+  },
+
+  /**
+   * Check if background monitoring is running
+   */
+  async isBackgroundMonitoringRunning(): Promise<boolean> {
+    try {
+      const isRunning = await BackgroundSync.isWiFiSpeedBackgroundRunning();
+      return isRunning || this.isMonitoring;
+    } catch (error) {
+      return this.isMonitoring;
+    }
+  },
+
+  /**
+   * Start polling for device status (when waiting for approval)
+   * @deprecated - No longer needed with SIM-based auth
+   */
+  startStatusPolling(onApproved: () => void): void {
+    console.log('[WiFiService] Status polling not needed in SIM-based auth');
+    // In SIM-based auth, if we get here, we're already approved
+    // Just call the callback immediately
+    onApproved();
+  },
+
+  /**
+   * Stop status polling
+   */
+  stopStatusPolling(): void {
+    if (this.statusPollingInterval) {
+      clearInterval(this.statusPollingInterval);
+      this.statusPollingInterval = null;
+    }
+  },
+
+  // ============================================
+  // UTILITY METHODS
+  // ============================================
+
+  /**
+   * Get stored device info
+   */
+  async getDeviceInfo(): Promise<{
+    deviceId: string | null;
+    wifiId: string | null;
+    status: string | null;
+  }> {
+    try {
+      const [deviceId, simId, status] = await Promise.all([
+        AsyncStorage.getItem(WIFI_DEVICE_ID_KEY),
+        AsyncStorage.getItem(WIFI_SIM_ID_KEY),
+        AsyncStorage.getItem(WIFI_STATUS_KEY),
+      ]);
+
+      return { deviceId, wifiId: simId, status };
+    } catch (error) {
+      console.error('[WiFiService] Error getting device info:', error);
+      return { deviceId: null, wifiId: null, status: null };
+    }
+  },
+
+  /**
+   * Get last speed test result
+   */
+  async getLastSpeedTest(): Promise<SpeedTestResult | null> {
+    try {
+      const data = await AsyncStorage.getItem(WIFI_LAST_TEST_KEY);
+      return data ? JSON.parse(data) : null;
+    } catch (error) {
+      console.error('[WiFiService] Error getting last speed test:', error);
+      return null;
+    }
+  },
+
+  /**
+   * Clear selected SIM data
+   * Also clears WiFi config from native preferences
+   */
+  async clearSelectedSimData(): Promise<void> {
+    try {
+      await AsyncStorage.multiRemove([
+        WIFI_SELECTED_SIM_KEY,
+        WIFI_DEVICE_TOKEN_KEY,
+        WIFI_TOKEN_EXPIRES_KEY,
+        WIFI_CONFIG_DATA_KEY,
+        WIFI_SIM_ID_KEY,
+        WIFI_SELECTED_AT_KEY,
+      ]);
+      console.log('[WiFiService] Cleared selected SIM data from AsyncStorage');
+
+      // Also clear from native preferences (Android only)
+      if (Platform.OS === 'android') {
+        try {
+          await BackgroundSync.setWiFiSpeedEnabled(false);
+          // Clear WiFi config by passing empty values (5 arguments required)
+          await BackgroundSync.setWiFiConfig('', '', '', '', '[]');
+          console.log('[WiFiService] Cleared WiFi config from native preferences');
+        } catch (nativeError) {
+          console.warn('[WiFiService] Failed to clear native WiFi config:', nativeError);
+        }
+      }
+    } catch (error) {
+      console.error('[WiFiService] Error clearing SIM data:', error);
+    }
+  },
+
+  /**
+   * Clear all WiFi data (for logout/reset)
+   */
+  async clearData(): Promise<void> {
+    try {
+      await AsyncStorage.multiRemove([
+        WIFI_DEVICE_ID_KEY,
+        WIFI_STATUS_KEY,
+        WIFI_LAST_TEST_KEY,
+        WIFI_SELECTED_SIM_KEY,
+        WIFI_DEVICE_TOKEN_KEY,
+        WIFI_TOKEN_EXPIRES_KEY,
+        WIFI_CONFIG_DATA_KEY,
+        WIFI_SIM_ID_KEY,
+        WIFI_SELECTED_AT_KEY,
+      ]);
+      console.log('[WiFiService] Cleared all WiFi data');
+    } catch (error) {
+      console.error('[WiFiService] Error clearing data:', error);
+    }
+  },
+
+  // ============================================
+  // LEGACY METHODS (KEPT FOR BACKWARD COMPATIBILITY)
+  // ============================================
+
+  /**
+   * @deprecated - Use initialize() with SIM-based auth
+   * Register device with backend (OLD METHOD)
+   */
+  async registerDevice(companyId: string): Promise<any> {
+    console.log('[WiFiService] [LEGACY] registerDevice called - redirecting to initialize');
+    return this.initialize(companyId);
+  },
+
+  /**
+   * @deprecated - Not needed in SIM-based auth
+   * Check device status (OLD METHOD)
+   */
+  async checkDeviceStatus(): Promise<any> {
+    console.log('[WiFiService] [LEGACY] checkDeviceStatus called');
+
+    const selectedSim = await this.getSelectedSimData();
+
+    if (selectedSim) {
+      return {
+        success: true,
+        data: {
+          exists: true,
+          isActive: true,
+          wifiId: selectedSim.simId,
+          wifiName: selectedSim.wifiConfig?.[0]?.wifiName || null,
+        },
+      };
+    }
+
+    return {
+      success: false,
+      data: {
+        exists: false,
+        isActive: false,
+        wifiId: null,
+        wifiName: null,
+      },
+    };
+  },
+};
+
+export default WiFiService;

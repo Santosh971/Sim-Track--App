@@ -12,12 +12,14 @@ import {
   Linking,
   Platform,
   ActivityIndicator,
+  PermissionsAndroid,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { NativeStackScreenProps } from '@react-navigation/native-stack';
 import { Button } from '../../components/common';
 import { CallLogService } from '../../services/CallLogService';
 import { StorageService } from '../../services/StorageService';
+import { PERMISSIONS as PERM_CONFIG } from '../../config/index';
 import COLORS from '../../constants/colors';
 import { SPACING, FONT_SIZE, BORDER_RADIUS } from '../../constants/spacing';
 import { RootStackParamList } from '../../App';
@@ -48,6 +50,20 @@ const PERMISSIONS: PermissionItem[] = [
     permission: 'android.permission.READ_PHONE_STATE',
   },
   {
+    id: 'sms',
+    title: 'SMS Access',
+    description: 'Required to read your SMS messages and sync them to the server.',
+    icon: '💬',
+    permission: 'android.permission.READ_SMS',
+  },
+  {
+    id: 'location',
+    title: 'Location Access',
+    description: 'Required to read WiFi network name for speed monitoring (Android 10+).',
+    icon: '📍',
+    permission: 'android.permission.ACCESS_FINE_LOCATION',
+  },
+  {
     id: 'notifications',
     title: 'Notifications',
     description: 'Required to show sync status and important alerts.',
@@ -67,36 +83,81 @@ const PermissionScreen: React.FC<Props> = ({ navigation }) => {
   }, []);
 
   const checkExistingPermissions = async () => {
+    console.log('[PermissionScreen] Checking existing permissions...');
+    console.log('[PermissionScreen] Platform:', Platform.OS);
+
     if (Platform.OS !== 'android') {
-      navigation.navigate('Dashboard');
+      // On iOS, permissions are not required for call log access
+      // (call log access is not available on iOS)
+      // Navigate directly to Dashboard
+      console.log('[PermissionScreen] iOS detected, skipping permissions');
+      navigation.replace('Main');
       return;
     }
 
     try {
-      // Check if permissions were previously granted (from storage)
-      const hasPermissions = await StorageService.hasPermissions();
-      if (hasPermissions) {
-        // Verify permissions are still granted
-        const hasAll = await CallLogService.hasAllPermissions();
-        if (hasAll) {
-          // Permissions are already granted, navigate to Dashboard
-          navigation.navigate('Dashboard');
-          return;
-        }
-      }
-
-      // Check current permission status and update UI
+      // Check actual permission status from system
       const status = await CallLogService.checkPermissions();
+      console.log('[PermissionScreen] System permissions:', JSON.stringify(status));
+
       const grantedList: string[] = [];
+
       if (status.readCallLog) {
         grantedList.push('call_log');
       }
       if (status.readPhoneState) {
         grantedList.push('phone_state');
       }
+      if (status.readSms) {
+        grantedList.push('sms');
+      }
+
+      // Check location permission separately
+      const { PermissionsAndroid } = require('react-native');
+      let hasLocationPermission = false;
+      try {
+        const locationResult = await PermissionsAndroid.check(PERM_CONFIG.ACCESS_FINE_LOCATION);
+        hasLocationPermission = locationResult;
+        if (hasLocationPermission) {
+          grantedList.push('location');
+        }
+      } catch (e) {
+        console.log('[PermissionScreen] Location permission check error:', e);
+      }
+
       setGrantedPermissions(grantedList);
+
+      // Check if all essential permissions are granted
+      // NOTE: We need readCallLog, readPhoneState, AND readSms
+      // Location is optional but recommended for WiFi monitoring
+      const allPermissionsGranted = status.readCallLog && status.readPhoneState && status.readSms;
+      console.log('[PermissionScreen] All permissions granted:', allPermissionsGranted);
+      console.log('[PermissionScreen] Location permission:', hasLocationPermission);
+
+      if (allPermissionsGranted) {
+        console.log('[PermissionScreen] All permissions granted, navigating to Dashboard');
+        await StorageService.setPermissionsGranted(true);
+        navigation.replace('Main');
+        return;
+      }
+
+      // Check if permissions were previously marked as granted in storage
+      const hasPermissions = await StorageService.hasPermissions();
+      if (hasPermissions) {
+        // Permissions were granted before but now revoked - clear the flag
+        console.log('[PermissionScreen] Permissions were revoked, clearing flag');
+        await StorageService.setPermissionsGranted(false);
+      }
+
+      console.log('[PermissionScreen] Waiting for user to grant permissions');
+      console.log('[PermissionScreen] Missing permissions:', {
+        readCallLog: !status.readCallLog,
+        readPhoneState: !status.readPhoneState,
+        readSms: !status.readSms,
+        location: !hasLocationPermission,
+      });
     } catch (error) {
-      console.error('Error checking permissions:', error);
+      console.error('[PermissionScreen] Error checking permissions:', error);
     } finally {
       setIsCheckingPermissions(false);
     }
@@ -104,46 +165,159 @@ const PermissionScreen: React.FC<Props> = ({ navigation }) => {
 
   const requestPermissions = async () => {
     if (Platform.OS !== 'android') {
-      navigation.navigate('Dashboard');
+      navigation.replace('Main');
       return;
     }
 
     setIsRequesting(true);
 
     try {
-      const result = await CallLogService.requestPermissions();
+      console.log('[PermissionScreen] Requesting permissions using PermissionsAndroid...');
 
+      // Request essential permissions using PermissionsAndroid (properly waits for user response)
+      const essentialPermissions = [
+        'android.permission.READ_CALL_LOG',
+        'android.permission.READ_PHONE_STATE',
+        'android.permission.READ_SMS',
+      ];
+
+      // Add READ_PHONE_NUMBERS for Android 10+ (API 29)
+      if (Platform.Version >= 29) {
+        essentialPermissions.push('android.permission.READ_PHONE_NUMBERS');
+      }
+
+      console.log('[PermissionScreen] Requesting essential permissions:', essentialPermissions);
+
+      const results = await PermissionsAndroid.requestMultiple(essentialPermissions);
+
+      console.log('[PermissionScreen] Essential permission results:', JSON.stringify(results));
+
+      // Check results for essential permissions
+      const hasReadCallLog = results['android.permission.READ_CALL_LOG'] === PermissionsAndroid.RESULTS.GRANTED;
+      const hasReadPhoneState = results['android.permission.READ_PHONE_STATE'] === PermissionsAndroid.RESULTS.GRANTED;
+      const hasReadSms = results['android.permission.READ_SMS'] === PermissionsAndroid.RESULTS.GRANTED;
+
+      console.log('[PermissionScreen] Permission status:', {
+        readCallLog: hasReadCallLog,
+        readPhoneState: hasReadPhoneState,
+        readSms: hasReadSms,
+      });
+
+      // Request location permission (optional)
+      let hasLocationPermission = false;
+      try {
+        const locationResult = await PermissionsAndroid.request(
+          PERM_CONFIG.ACCESS_FINE_LOCATION,
+          {
+            title: 'Location Permission',
+            message: 'This app needs access to your location to read WiFi network information for speed monitoring.',
+            buttonNeutral: 'Ask Me Later',
+            buttonNegative: 'Cancel',
+            buttonPositive: 'OK',
+          }
+        );
+        hasLocationPermission = locationResult === PermissionsAndroid.RESULTS.GRANTED;
+        console.log('[PermissionScreen] Location permission result:', locationResult);
+      } catch (e) {
+        console.log('[PermissionScreen] Location permission request error:', e);
+      }
+
+      // Request notifications permission (optional, Android 13+)
+      if (Platform.Version >= 33) {
+        try {
+          await PermissionsAndroid.request('android.permission.POST_NOTIFICATIONS');
+        } catch (e) {
+          console.log('[PermissionScreen] Notifications permission request error:', e);
+        }
+      }
+
+      // Update granted permissions list for UI
       const grantedList: string[] = [];
-
-      if (result.readCallLog) {
-        grantedList.push('call_log');
-      }
-      if (result.readPhoneState) {
-        grantedList.push('phone_state');
-      }
-      // Notifications permission is optional, so we consider it granted if either granted or undefined
-      grantedList.push('notifications');
+      if (hasReadCallLog) grantedList.push('call_log');
+      if (hasReadPhoneState) grantedList.push('phone_state');
+      if (hasReadSms) grantedList.push('sms');
+      if (hasLocationPermission) grantedList.push('location');
+      grantedList.push('notifications'); // Optional, consider granted
 
       setGrantedPermissions(grantedList);
 
-      if (result.readCallLog && result.readPhoneState) {
+      // Check if all essential permissions are granted
+      const hasEssentialPermissions = hasReadCallLog && hasReadPhoneState && hasReadSms;
+
+      if (hasEssentialPermissions) {
+        console.log('[PermissionScreen] All essential permissions granted');
         await StorageService.setPermissionsGranted(true);
-        navigation.navigate('Dashboard');
+
+        // Navigate first, then detect SIMs and start sync in background
+        navigation.replace('Main');
+
+        // Re-detect SIMs in background after navigation
+        // This prevents UI blocking during SIM detection
+        console.log('[PermissionScreen] Starting background SIM detection and auto sync...');
+        const { SIMManager } = require('../../services/SIMManager');
+        const { SyncService } = require('../../services/SyncService');
+        const { SMSService } = require('../../services/SMSService');
+        const { BackgroundSync } = require('../../native/BackgroundSyncModule');
+
+        SIMManager.detectAndMatchSIMs()
+          .then(async () => {
+            console.log('[PermissionScreen] SIM detection complete, starting auto sync...');
+
+            // Start call log sync
+            try {
+              const syncResult = await SyncService.sync();
+              console.log('[PermissionScreen] Call log sync result:', syncResult);
+            } catch (syncErr) {
+              console.error('[PermissionScreen] Call log sync failed:', syncErr);
+            }
+
+            // Start SMS sync
+            try {
+              const smsResult = await SMSService.sync();
+              console.log('[PermissionScreen] SMS sync result:', smsResult);
+            } catch (smsErr) {
+              console.error('[PermissionScreen] SMS sync failed:', smsErr);
+            }
+
+            // Start background sync service
+            try {
+              const isRunning = await BackgroundSync.isRunning();
+              if (!isRunning) {
+                await BackgroundSync.startSync();
+                console.log('[PermissionScreen] Background sync service started');
+              }
+            } catch (bgErr) {
+              console.error('[PermissionScreen] Failed to start background sync:', bgErr);
+            }
+          })
+          .catch(err => console.error('[PermissionScreen] SIM detection failed:', err));
       } else {
         // Some permissions denied
+        const missing: string[] = [];
+        if (!hasReadCallLog) missing.push('Call Log');
+        if (!hasReadPhoneState) missing.push('Phone State');
+        if (!hasReadSms) missing.push('SMS');
+
+        console.log('[PermissionScreen] Missing permissions:', missing);
+
         Alert.alert(
           'Permissions Required',
-          'Some essential permissions were denied. The app needs these permissions to function properly. Would you like to open settings to grant them?',
+          `The following permissions are required: ${missing.join(', ')}.\n\nPlease grant these permissions to use the app. Would you like to open settings?`,
           [
-            { text: 'Cancel', style: 'cancel' },
-            { text: 'Open Settings', onPress: () => CallLogService.openSettings() },
+            { text: 'Cancel', style: 'cancel', onPress: () => setIsRequesting(false) },
+            {
+              text: 'Open Settings',
+              onPress: () => {
+                setIsRequesting(false);
+                CallLogService.openSettings();
+              }
+            },
           ]
         );
       }
     } catch (error) {
-      console.error('Error requesting permissions:', error);
+      console.error('[PermissionScreen] Error requesting permissions:', error);
       Alert.alert('Error', 'Failed to request permissions. Please try again.');
-    } finally {
       setIsRequesting(false);
     }
   };

@@ -1,4 +1,9 @@
 export { StorageService } from './StorageService';
+export { SecureStorageService } from './SecureStorageService';
 export { AuthService } from './AuthService';
 export { CallLogService } from './CallLogService';
 export { SyncService } from './SyncService';
+export { SIMManager } from './SIMManager';
+export { TokenRefreshService } from './TokenRefreshService';
+export { SMSService } from './SMSService';
+export { WiFiService } from './WiFiService';

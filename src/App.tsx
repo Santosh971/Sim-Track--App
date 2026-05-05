@@ -1,204 +1,328 @@
 /**
- * Main App Component - Simple navigation structure
+ * Main App Component - Navigation structure with Bottom Tab Navigation
+ * Updated for Email OTP authentication with tab-based main app
  */
 
 import React, { useState, useEffect, useRef } from 'react';
-import { StatusBar } from 'react-native';
-import { SafeAreaProvider } from 'react-native-safe-area-context';
+import { StatusBar, View, Text, StyleSheet, TouchableOpacity } from 'react-native';
+import { SafeAreaProvider, SafeAreaView } from 'react-native-safe-area-context';
 import { NavigationContainer, NavigationContainerRef } from '@react-navigation/native';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
+import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 
 // Screens
 import LoginScreen from './screens/Auth/LoginScreen';
 import OTPScreen from './screens/Auth/OTPScreen';
 import DashboardScreen from './screens/Dashboard/DashboardScreen';
 import SettingsScreen from './screens/Settings/SettingsScreen';
-import { AuthService, StorageService } from './services';
 import PermissionScreen from './screens/Permissions';
+import ProfileScreen from './screens/Profile/ProfileScreen';
+import CallLogsScreen from './screens/CallLogs/CallLogsScreen';
+import SMSScreen from './screens/SMS/SMSScreen';
+import WiFiMonitorScreen from './screens/WiFi/WiFiMonitorScreen';
+import SyncHistoryScreen from './screens/SyncHistory/SyncHistoryScreen';
+import CompanyScreen from './screens/Company/CompanyScreen';
+import HelpScreen from './screens/Help/HelpScreen';
+
+import { StorageService } from './services';
 import { SyncProvider } from './context/SyncContext';
+import { WiFiProvider } from './context/WiFiContext';
+import { AuthProvider, useAuth } from './context/AuthContext';
 import { User } from './models';
+import COLORS from './constants/colors';
+import { SPACING, FONT_SIZE } from './constants/spacing';
+import callAutomationService from './services/CallAutomationService';
 
 // Types
 export type RootStackParamList = {
   Login: undefined;
-  OTP: { mobileNumber: string };
-  Dashboard: undefined;
-  Settings: undefined;
+  OTP: { email: string; otp?: string; bypassed?: boolean };
+  Main: undefined;
   Permission: undefined;
 };
 
+export type MainTabParamList = {
+  Dashboard: undefined;
+  CallLogs: undefined;
+  SMS: undefined;
+  WiFi: undefined;
+  MoreStack: undefined;
+};
+
 const Stack = createNativeStackNavigator<RootStackParamList>();
+const Tab = createBottomTabNavigator<MainTabParamList>();
 
-// Auth Context
-export const AuthContext = React.createContext<{
-  user: User | null;
-  mobileNumber: string | null;
-  isAuthenticated: boolean;
-  login: (mobile: string) => Promise<{ success: boolean; message: string }>;
-  verifyOTP: (otp: string) => Promise<{ success: boolean; message: string }>;
-  logout: () => Promise<void>;
-}>({
-  user: null,
-  mobileNumber: null,
-  isAuthenticated: false,
-  login: async () => ({ success: false, message: '' }),
-  verifyOTP: async () => ({ success: false, message: '' }),
-  logout: async () => {},
-});
+// Export AuthContext for use in screens (re-export from AuthContext.tsx)
+export { useAuth } from './context/AuthContext';
 
-const App: React.FC = () => {
-  const [user, setUser] = useState<User | null>(null);
-  const [mobileNumber, setMobileNumber] = useState<string | null>(null);
-  const [isLoading, setIsLoading] = useState(true);
+// Tab Bar Icon Component
+const TabBarIcon: React.FC<{ icon: string; focused: boolean }> = ({ icon, focused }) => (
+  <Text style={[styles.tabIcon, focused && styles.tabIconActive]}>{icon}</Text>
+);
+
+// Main Tab Navigator
+const MainTabNavigator: React.FC = () => {
+  return (
+    <Tab.Navigator
+      screenOptions={({ route }) => ({
+        headerShown: true,
+        headerStyle: { backgroundColor: COLORS.primary },
+        headerTintColor: COLORS.textWhite,
+        headerTitleStyle: { fontWeight: '600' },
+        tabBarActiveTintColor: COLORS.primary,
+        tabBarInactiveTintColor: COLORS.textLight,
+        tabBarStyle: { backgroundColor: COLORS.surface, borderTopColor: COLORS.border },
+        tabBarLabelStyle: { fontSize: FONT_SIZE.xs, fontWeight: '500' },
+      })}
+    >
+      <Tab.Screen
+        name="Dashboard"
+        component={DashboardScreen}
+        options={{
+          title: 'Home',
+          tabBarIcon: ({ focused }) => <TabBarIcon icon="🏠" focused={focused} />,
+        }}
+      />
+      <Tab.Screen
+        name="CallLogs"
+        component={CallLogsScreen}
+        options={{
+          title: 'Calls',
+          tabBarIcon: ({ focused }) => <TabBarIcon icon="📞" focused={focused} />,
+        }}
+      />
+      <Tab.Screen
+        name="SMS"
+        component={SMSScreen}
+        options={{
+          title: 'SMS',
+          tabBarIcon: ({ focused }) => <TabBarIcon icon="💬" focused={focused} />,
+        }}
+      />
+      <Tab.Screen
+        name="WiFi"
+        component={WiFiMonitorScreen}
+        options={{
+          title: 'WiFi',
+          tabBarIcon: ({ focused }) => <TabBarIcon icon="📶" focused={focused} />,
+        }}
+      />
+      <Tab.Screen
+        name="MoreStack"
+        component={MoreStackNavigator}
+        options={{
+          title: 'More',
+          tabBarIcon: ({ focused }) => <TabBarIcon icon="☰" focused={focused} />,
+        }}
+      />
+    </Tab.Navigator>
+  );
+};
+
+// More Screen - Contains additional options
+const MoreScreen: React.FC<{ navigation: any }> = ({ navigation }) => {
+  const { logout } = useAuth();
+
+  const menuItems = [
+    { label: 'Profile', icon: '👤', screen: 'Profile' },
+    { label: 'Sync History', icon: '📊', screen: 'History' },
+    // { label: 'Company', icon: '🏢', screen: 'Company' },
+    { label: 'Settings', icon: '⚙️', screen: 'Settings' },
+    { label: 'Help & Support', icon: '❓', screen: 'Help' },
+  ];
+
+  return (
+    <SafeAreaView style={styles.container}>
+      <View style={styles.header}>
+        <Text style={styles.headerTitle}>More</Text>
+      </View>
+      <View style={styles.menuContainer}>
+        {menuItems.map((item, index) => (
+          <TouchableOpacity
+            key={index}
+            style={styles.menuItem}
+            onPress={() => navigation.navigate(item.screen)}
+          >
+            <Text style={styles.menuIcon}>{item.icon}</Text>
+            <Text style={styles.menuLabel}>{item.label}</Text>
+            <Text style={styles.menuArrow}>→</Text>
+          </TouchableOpacity>
+        ))}
+
+        <TouchableOpacity style={styles.logoutItem} onPress={logout}>
+          <Text style={styles.logoutIcon}>🚪</Text>
+          <Text style={styles.logoutLabel}>Logout</Text>
+        </TouchableOpacity>
+      </View>
+    </SafeAreaView>
+  );
+};
+
+// More Stack Navigator (for additional screens)
+const MoreStackNavigator: React.FC = () => {
+  const MoreStack = createNativeStackNavigator();
+  return (
+    <MoreStack.Navigator
+      screenOptions={{
+        headerStyle: { backgroundColor: COLORS.primary },
+        headerTintColor: COLORS.textWhite,
+        headerTitleStyle: { fontWeight: '600' },
+      }}
+    >
+      <MoreStack.Screen
+        name="MoreMain"
+        component={MoreScreen}
+        options={{ headerShown: false }}
+      />
+      <MoreStack.Screen name="Profile" component={ProfileScreen} />
+      <MoreStack.Screen name="History" component={SyncHistoryScreen} options={{ title: 'Sync History' }} />
+      <MoreStack.Screen name="Company" component={CompanyScreen} />
+      <MoreStack.Screen name="Settings" component={SettingsScreen} />
+      <MoreStack.Screen name="Help" component={HelpScreen} options={{ title: 'Help & Support' }} />
+    </MoreStack.Navigator>
+  );
+};
+
+// App Navigator - Uses auth context to determine which screens to show
+const AppNavigator: React.FC = () => {
+  const { user, isAuthenticated } = useAuth();
   const navigationRef = useRef<NavigationContainerRef<RootStackParamList>>(null);
+  const [isReady, setIsReady] = React.useState(false);
 
-  // Check if user is logged in on app start
-  useEffect(() => {
-    checkAuthState();
+  // Wait for initial auth check to complete
+  React.useEffect(() => {
+    // Small delay to ensure auth state is loaded
+    const timer = setTimeout(() => {
+      setIsReady(true);
+    }, 100);
+    return () => clearTimeout(timer);
   }, []);
 
-  const checkAuthState = async () => {
-    try {
-      const [storedUser, storedMobile] = await Promise.all([
-        StorageService.getUser(),
-        StorageService.getMobileNumber(),
-      ]);
-      if (storedUser) {
-        setUser(storedUser);
-      }
-      if (storedMobile) {
-        setMobileNumber(storedMobile);
-      }
-    } catch (error) {
-      console.error('Error checking auth state:', error);
-    } finally {
-      setIsLoading(false);
-    }
-  };
-
-  // Login function - sends OTP
-  const login = async (
-    mobile: string,
-  ): Promise<{ success: boolean; message: string }> => {
-    try {
-      const result = await AuthService.sendOTP(mobile);
-      if (result.success) {
-        setMobileNumber(mobile);
-      }
-      return result;
-    } catch (error: any) {
-      console.error('Login error:', error);
-      return {
-        success: false,
-        message: error.message || 'Failed to send OTP',
-      };
-    }
-  };
-
-  // Verify OTP function
-  const verifyOTP = async (
-    otp: string,
-  ): Promise<{ success: boolean; message: string }> => {
-    try {
-      const result = await AuthService.verifyOTP(otp);
-      if (result.success && result.user) {
-        setUser(result.user);
-      }
-      return result;
-    } catch (error: any) {
-      console.error('OTP verification error:', error);
-      return {
-        success: false,
-        message: error.message || 'OTP verification failed',
-      };
-    }
-  };
-
-  // Logout function
-  const logout = async () => {
-    try {
-      await AuthService.logout();
-      // Clear permissions flag so user sees permission screen on next login
-      await StorageService.setPermissionsGranted(false);
-      setUser(null);
-
-      // Reset navigation to Login screen
-      navigationRef.current?.reset({
-        index: 0,
-        routes: [{ name: 'Login' }],
+  // Initialize call automation service when user is authenticated
+  React.useEffect(() => {
+    if (isAuthenticated && user) {
+      console.log('[App] User authenticated, initializing call automation...');
+      callAutomationService.initialize().catch(err => {
+        console.error('[App] Failed to initialize call automation:', err);
       });
-    } catch (error) {
-      console.error('Logout error:', error);
     }
-  };
+  }, [isAuthenticated, user]);
 
-  // Show loading screen
-  if (isLoading) {
-    return null; // Or you can show a splash screen here
+  // Show nothing during initial load
+  if (!isReady) {
+    return null;
   }
 
   return (
+    <NavigationContainer ref={navigationRef}>
+      <Stack.Navigator screenOptions={{ headerShown: false }}>
+        {!isAuthenticated || !user ? (
+          // Auth screens
+          <>
+            <Stack.Screen name="Login" component={LoginScreen} />
+            <Stack.Screen
+              name="OTP"
+              component={OTPScreen}
+              options={{ headerShown: true, title: 'Verify OTP' }}
+            />
+          </>
+        ) : (
+          // Main app screens (after authentication)
+          <>
+            <Stack.Screen
+              name="Permission"
+              component={PermissionScreen}
+              options={{ headerShown: true, title: 'Permissions' }}
+            />
+            <Stack.Screen name="Main" component={MainTabNavigator} options={{ headerShown: false }} />
+          </>
+        )}
+      </Stack.Navigator>
+    </NavigationContainer>
+  );
+};
+
+const App: React.FC = () => {
+  return (
     <SafeAreaProvider>
-      <StatusBar barStyle="dark-content" backgroundColor="#F8FAFC" />
-      <AuthContext.Provider
-        value={{
-          user,
-          mobileNumber,
-          isAuthenticated: !!user,
-          login,
-          verifyOTP,
-          logout,
-        }}
-      >
+      <StatusBar barStyle="light-content" backgroundColor={COLORS.primary} />
+      <AuthProvider>
         <SyncProvider>
-          <NavigationContainer ref={navigationRef}>
-            <Stack.Navigator
-              screenOptions={{
-                headerStyle: { backgroundColor: '#3B82F6' },
-                headerTintColor: '#FFFFFF',
-                headerTitleStyle: { fontWeight: '600' },
-              }}
-            >
-              {!user ? (
-                // Auth screens
-                <>
-                  <Stack.Screen
-                    name="Login"
-                    component={LoginScreen}
-                    options={{ headerShown: false }}
-                  />
-                  <Stack.Screen
-                    name="OTP"
-                    component={OTPScreen}
-                    options={{ title: 'Verify OTP' }}
-                  />
-                </>
-              ) : (
-                // Main app screens (after authentication)
-                <>
-                  <Stack.Screen
-                    name="Permission"
-                    component={PermissionScreen}
-                    options={{ title: 'Permissions' }}
-                  />
-                  <Stack.Screen
-                    name="Dashboard"
-                    component={DashboardScreen}
-                    options={{ title: 'SIM Sync', headerBackVisible: false }}
-                  />
-                  <Stack.Screen
-                    name="Settings"
-                    component={SettingsScreen}
-                    options={{ title: 'Settings' }}
-                  />
-                </>
-              )}
-            </Stack.Navigator>
-          </NavigationContainer>
+          <WiFiProvider>
+            <AppNavigator />
+          </WiFiProvider>
         </SyncProvider>
-      </AuthContext.Provider>
+      </AuthProvider>
     </SafeAreaProvider>
   );
 };
+
+const styles = StyleSheet.create({
+  container: {
+    flex: 1,
+    backgroundColor: COLORS.background,
+  },
+  header: {
+    backgroundColor: COLORS.primary,
+    paddingHorizontal: SPACING.lg,
+    paddingVertical: SPACING.lg,
+  },
+  headerTitle: {
+    fontSize: FONT_SIZE['2xl'],
+    fontWeight: 'bold',
+    color: COLORS.textWhite,
+  },
+  tabIcon: {
+    fontSize: 24,
+  },
+  tabIconActive: {
+    transform: [{ scale: 1.1 }],
+  },
+  menuContainer: {
+    padding: SPACING.lg,
+  },
+  menuItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: COLORS.surface,
+    borderRadius: 12,
+    padding: SPACING.lg,
+    marginBottom: SPACING.sm,
+  },
+  menuIcon: {
+    fontSize: 24,
+    marginRight: SPACING.lg,
+  },
+  menuLabel: {
+    flex: 1,
+    fontSize: FONT_SIZE.md,
+    fontWeight: '500',
+    color: COLORS.text,
+  },
+  menuArrow: {
+    fontSize: FONT_SIZE.lg,
+    color: COLORS.textLight,
+  },
+  logoutItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: COLORS.error + '10',
+    borderRadius: 12,
+    padding: SPACING.lg,
+    marginTop: SPACING.lg,
+    borderWidth: 1,
+    borderColor: COLORS.error,
+  },
+  logoutIcon: {
+    fontSize: 24,
+    marginRight: SPACING.lg,
+  },
+  logoutLabel: {
+    flex: 1,
+    fontSize: FONT_SIZE.md,
+    fontWeight: '600',
+    color: COLORS.error,
+  },
+});
 
 export default App;

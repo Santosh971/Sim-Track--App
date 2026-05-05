@@ -1,16 +1,31 @@
 /**
  * Storage Service - Wrapper around AsyncStorage
+ * Handles non-sensitive data storage
  */
 
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { STORAGE_KEYS } from '../config/index';
-import { User } from '../models/index';
+import { User, MatchedSIM } from '../models/index';
 
 /**
  * Storage service for managing app data
+ * Note: Sensitive data like tokens should use SecureStorageService
  */
 export const StorageService = {
-  // Mobile Number (persistent - used for sync)
+  // Email (non-sensitive, used for display)
+  async getEmail(): Promise<string | null> {
+    return AsyncStorage.getItem(STORAGE_KEYS.EMAIL);
+  },
+
+  async setEmail(email: string): Promise<void> {
+    await AsyncStorage.setItem(STORAGE_KEYS.EMAIL, email);
+  },
+
+  async removeEmail(): Promise<void> {
+    await AsyncStorage.removeItem(STORAGE_KEYS.EMAIL);
+  },
+
+  // Legacy mobile number (kept for backwards compatibility)
   async getMobileNumber(): Promise<string | null> {
     return AsyncStorage.getItem(STORAGE_KEYS.MOBILE_NUMBER);
   },
@@ -23,33 +38,7 @@ export const StorageService = {
     await AsyncStorage.removeItem(STORAGE_KEYS.MOBILE_NUMBER);
   },
 
-  // JWT Token (cleared on logout)
-  async getToken(): Promise<string | null> {
-    return AsyncStorage.getItem(STORAGE_KEYS.JWT_TOKEN);
-  },
-
-  async setToken(token: string): Promise<void> {
-    await AsyncStorage.setItem(STORAGE_KEYS.JWT_TOKEN, token);
-  },
-
-  async removeToken(): Promise<void> {
-    await AsyncStorage.removeItem(STORAGE_KEYS.JWT_TOKEN);
-  },
-
-  // Refresh Token
-  async getRefreshToken(): Promise<string | null> {
-    return AsyncStorage.getItem(STORAGE_KEYS.REFRESH_TOKEN);
-  },
-
-  async setRefreshToken(token: string): Promise<void> {
-    await AsyncStorage.setItem(STORAGE_KEYS.REFRESH_TOKEN, token);
-  },
-
-  async removeRefreshToken(): Promise<void> {
-    await AsyncStorage.removeItem(STORAGE_KEYS.REFRESH_TOKEN);
-  },
-
-  // User Data
+  // User Data (non-sensitive profile data)
   async getUser(): Promise<User | null> {
     const userData = await AsyncStorage.getItem(STORAGE_KEYS.USER_DATA);
     return userData ? JSON.parse(userData) : null;
@@ -63,18 +52,62 @@ export const StorageService = {
     await AsyncStorage.removeItem(STORAGE_KEYS.USER_DATA);
   },
 
-  // Last Sync Timestamp
-  async getLastSync(): Promise<number | null> {
-    const timestamp = await AsyncStorage.getItem(STORAGE_KEYS.LAST_SYNC);
+  // Matched SIMs
+  async getMatchedSIMs(): Promise<MatchedSIM[] | null> {
+    const data = await AsyncStorage.getItem(STORAGE_KEYS.MATCHED_SIMS);
+    return data ? JSON.parse(data) : null;
+  },
+
+  async setMatchedSIMs(sims: MatchedSIM[]): Promise<void> {
+    await AsyncStorage.setItem(STORAGE_KEYS.MATCHED_SIMS, JSON.stringify(sims));
+  },
+
+  async removeMatchedSIMs(): Promise<void> {
+    await AsyncStorage.removeItem(STORAGE_KEYS.MATCHED_SIMS);
+  },
+
+  // Device ID
+  async getDeviceId(): Promise<string | null> {
+    return AsyncStorage.getItem(STORAGE_KEYS.DEVICE_ID);
+  },
+
+  async setDeviceId(deviceId: string): Promise<void> {
+    await AsyncStorage.setItem(STORAGE_KEYS.DEVICE_ID, deviceId);
+  },
+
+  async removeDeviceId(): Promise<void> {
+    await AsyncStorage.removeItem(STORAGE_KEYS.DEVICE_ID);
+  },
+
+  // Valid SIM IDs (for background sync)
+  async getValidSIMIds(): Promise<string[] | null> {
+    const data = await AsyncStorage.getItem(STORAGE_KEYS.VALID_SIM_IDS);
+    return data ? JSON.parse(data) : null;
+  },
+
+  async setValidSIMIds(simIds: string[]): Promise<void> {
+    await AsyncStorage.setItem(STORAGE_KEYS.VALID_SIM_IDS, JSON.stringify(simIds));
+  },
+
+  async removeValidSIMIds(): Promise<void> {
+    await AsyncStorage.removeItem(STORAGE_KEYS.VALID_SIM_IDS);
+  },
+
+  // Last Sync Timestamp (per SIM)
+  async getLastSync(simId?: string): Promise<number | null> {
+    const key = simId ? `${STORAGE_KEYS.LAST_SYNC}_${simId}` : STORAGE_KEYS.LAST_SYNC;
+    const timestamp = await AsyncStorage.getItem(key);
     return timestamp ? parseInt(timestamp, 10) : null;
   },
 
-  async setLastSync(timestamp: number): Promise<void> {
-    await AsyncStorage.setItem(STORAGE_KEYS.LAST_SYNC, timestamp.toString());
+  async setLastSync(timestamp: number, simId?: string): Promise<void> {
+    const key = simId ? `${STORAGE_KEYS.LAST_SYNC}_${simId}` : STORAGE_KEYS.LAST_SYNC;
+    await AsyncStorage.setItem(key, timestamp.toString());
   },
 
-  async removeLastSync(): Promise<void> {
-    await AsyncStorage.removeItem(STORAGE_KEYS.LAST_SYNC);
+  async removeLastSync(simId?: string): Promise<void> {
+    const key = simId ? `${STORAGE_KEYS.LAST_SYNC}_${simId}` : STORAGE_KEYS.LAST_SYNC;
+    await AsyncStorage.removeItem(key);
   },
 
   // Sync Interval
@@ -107,19 +140,31 @@ export const StorageService = {
     await AsyncStorage.setItem(STORAGE_KEYS.PERMISSIONS_GRANTED, granted.toString());
   },
 
-  // Clear all auth data (logout)
+  // Clear auth data (logout) - keeps SIM data for background sync
   async clearAuthData(): Promise<void> {
     await AsyncStorage.multiRemove([
-      STORAGE_KEYS.JWT_TOKEN,
-      STORAGE_KEYS.REFRESH_TOKEN,
       STORAGE_KEYS.USER_DATA,
+      STORAGE_KEYS.EMAIL,
     ]);
-    // Note: We keep MOBILE_NUMBER for sync functionality
+    // Note: We keep MOBILE_NUMBER, MATCHED_SIMS, VALID_SIM_IDS for background sync
   },
 
   // Clear all data (full reset)
   async clearAll(): Promise<void> {
     await AsyncStorage.clear();
+  },
+
+  // Generic methods for custom keys
+  async getItem(key: string): Promise<string | null> {
+    return AsyncStorage.getItem(key);
+  },
+
+  async setItem(key: string, value: string): Promise<void> {
+    await AsyncStorage.setItem(key, value);
+  },
+
+  async removeItem(key: string): Promise<void> {
+    await AsyncStorage.removeItem(key);
   },
 };
 

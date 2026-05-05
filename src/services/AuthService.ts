@@ -1,17 +1,19 @@
 /**
- * Authentication Service - Handles OTP-based authentication
+ * Authentication Service - Handles Email OTP-based authentication
  */
 
 import { authApi } from '../api/index';
 import { StorageService } from './StorageService';
-import { LoginCredentials, OTPCredentials, User, AuthResponse } from '../models/index';
+import { SecureStorageService } from './SecureStorageService';
+import { SIMManager } from './SIMManager';
+import { User, OTPCredentials, AuthResponse } from '../models/index';
 
 export interface AuthState {
   user: User | null;
   token: string | null;
   isAuthenticated: boolean;
   isLoading: boolean;
-  mobileNumber: string | null;
+  email: string | null;
 }
 
 /**
@@ -19,19 +21,21 @@ export interface AuthState {
  */
 export const AuthService = {
   /**
-   * Send OTP to mobile number
+   * Send OTP to email address
+   * OTP is sent via email and NOT returned in response
    */
-  async sendOTP(mobileNumber: string): Promise<{ success: boolean; message: string; expiresAt?: string }> {
+  async sendOTP(email: string): Promise<{ success: boolean; message: string; expiresAt?: string }> {
     try {
-      // Validate mobile number
-      if (!/^\d{10}$/.test(mobileNumber)) {
-        throw new Error('Invalid mobile number. Must be 10 digits.');
+      // Validate email
+      const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+      if (!emailRegex.test(email)) {
+        throw new Error('Invalid email address.');
       }
 
-      const response = await authApi.sendOTP(mobileNumber);
+      const response = await authApi.sendOTP(email);
 
-      // Store mobile number for later use
-      await StorageService.setMobileNumber(mobileNumber);
+      // Store email for later use
+      await StorageService.setEmail(email);
 
       return {
         success: response.success,
@@ -62,10 +66,10 @@ export const AuthService = {
    */
   async verifyOTP(otp: string): Promise<{ success: boolean; message: string; user?: User }> {
     try {
-      // Get stored mobile number
-      const mobileNumber = await StorageService.getMobileNumber();
-      if (!mobileNumber) {
-        throw new Error('Mobile number not found. Please request OTP again.');
+      // Get stored email
+      const email = await StorageService.getEmail();
+      if (!email) {
+        throw new Error('Email not found. Please request OTP again.');
       }
 
       // Validate OTP
@@ -73,14 +77,14 @@ export const AuthService = {
         throw new Error('Invalid OTP. Must be 6 digits.');
       }
 
-      const credentials: OTPCredentials = { mobileNumber, otp };
+      const credentials: OTPCredentials = { email, otp };
       const response = await authApi.verifyOTP(credentials);
 
       if (response.success && response.token) {
-        // Store auth data
-        await StorageService.setToken(response.token);
+        // Store auth tokens securely in keychain
+        await SecureStorageService.setToken(response.token);
         if (response.refreshToken) {
-          await StorageService.setRefreshToken(response.refreshToken);
+          await SecureStorageService.setRefreshToken(response.refreshToken);
         }
         if (response.user) {
           await StorageService.setUser(response.user);
@@ -111,12 +115,12 @@ export const AuthService = {
    */
   async resendOTP(): Promise<{ success: boolean; message: string }> {
     try {
-      const mobileNumber = await StorageService.getMobileNumber();
-      if (!mobileNumber) {
-        throw new Error('Mobile number not found. Please start login again.');
+      const email = await StorageService.getEmail();
+      if (!email) {
+        throw new Error('Email not found. Please start login again.');
       }
 
-      const response = await authApi.resendOTP(mobileNumber);
+      const response = await authApi.resendOTP(email);
 
       return {
         success: response.success,
@@ -132,6 +136,56 @@ export const AuthService = {
   },
 
   /**
+   * Validate current session
+   */
+  async validateSession(): Promise<{ valid: boolean; user?: User }> {
+    try {
+      const token = await SecureStorageService.getToken();
+      if (!token) {
+        return { valid: false };
+      }
+
+      const response = await authApi.getProfile();
+      if (response.success && response.data?.user) {
+        await StorageService.setUser(response.data.user);
+        return { valid: true, user: response.data.user };
+      }
+
+      return { valid: false };
+    } catch (error) {
+      console.error('Session validation error:', error);
+      return { valid: false };
+    }
+  },
+
+  /**
+   * Refresh authentication token
+   */
+  async refreshToken(): Promise<{ success: boolean; message: string }> {
+    try {
+      const refreshToken = await SecureStorageService.getRefreshToken();
+      if (!refreshToken) {
+        return { success: false, message: 'No refresh token available' };
+      }
+
+      const response = await authApi.refreshToken(refreshToken);
+
+      if (response.success && response.token) {
+        await SecureStorageService.setToken(response.token);
+        if (response.refreshToken) {
+          await SecureStorageService.setRefreshToken(response.refreshToken);
+        }
+        return { success: true, message: 'Token refreshed successfully' };
+      }
+
+      return { success: false, message: response.message || 'Token refresh failed' };
+    } catch (error: any) {
+      console.error('Token refresh error:', error);
+      return { success: false, message: error.message || 'Token refresh failed' };
+    }
+  },
+
+  /**
    * Logout - Clear auth data and invalidate token on server
    */
   async logout(): Promise<void> {
@@ -143,7 +197,10 @@ export const AuthService = {
       // Continue with local logout even if API fails
     }
 
-    // Clear local auth data
+    // Clear secure storage (tokens)
+    await SecureStorageService.clearAll();
+
+    // Clear local auth data (but keep SIM data for background sync)
     await StorageService.clearAuthData();
   },
 
@@ -151,10 +208,10 @@ export const AuthService = {
    * Get current auth state
    */
   async getAuthState(): Promise<AuthState> {
-    const [token, user, mobileNumber] = await Promise.all([
-      StorageService.getToken(),
+    const [token, user, email] = await Promise.all([
+      SecureStorageService.getToken(),
       StorageService.getUser(),
-      StorageService.getMobileNumber(),
+      StorageService.getEmail(),
     ]);
 
     return {
@@ -162,7 +219,7 @@ export const AuthService = {
       user,
       isAuthenticated: !!token && !!user,
       isLoading: false,
-      mobileNumber,
+      email,
     };
   },
 
@@ -170,16 +227,27 @@ export const AuthService = {
    * Check if user is authenticated
    */
   async isAuthenticated(): Promise<boolean> {
-    const token = await StorageService.getToken();
+    const token = await SecureStorageService.getToken();
     const user = await StorageService.getUser();
     return !!token && !!user;
   },
 
   /**
-   * Get stored mobile number
+   * Get stored email
    */
-  async getMobileNumber(): Promise<string | null> {
-    return StorageService.getMobileNumber();
+  async getEmail(): Promise<string | null> {
+    return StorageService.getEmail();
+  },
+
+  /**
+   * Initialize SIM detection after successful login
+   */
+  async initializeSIMs(): Promise<void> {
+    try {
+      await SIMManager.detectAndMatchSIMs();
+    } catch (error) {
+      console.error('Error initializing SIMs:', error);
+    }
   },
 };
 

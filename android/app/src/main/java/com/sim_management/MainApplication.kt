@@ -8,6 +8,10 @@ import com.facebook.react.ReactNativeApplicationEntryPoint.loadReactNative
 import com.facebook.react.defaults.DefaultReactHost.getDefaultReactHost
 import com.sim_management.modules.CallLogPackage
 import com.sim_management.modules.BackgroundSyncPackage
+import com.sim_management.modules.SIMPackage
+import com.sim_management.modules.SMSPackage
+import com.sim_management.modules.WiFiSpeedPackage
+import com.sim_management.modules.CallAutomationPackage // [CALL AUTOMATION]
 
 class MainApplication : Application(), ReactApplication {
 
@@ -19,6 +23,10 @@ class MainApplication : Application(), ReactApplication {
           // Packages that cannot be autolinked yet can be added manually here
           add(CallLogPackage())
           add(BackgroundSyncPackage())
+          add(SIMPackage())
+          add(SMSPackage())
+          add(WiFiSpeedPackage())
+          add(CallAutomationPackage()) // [CALL AUTOMATION]
         },
     )
   }

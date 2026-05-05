@@ -1,8 +1,8 @@
 /**
- * Login Screen - Simple mobile number entry
+ * Login Screen - Email entry for OTP authentication
  */
 
-import React, { useState, useContext } from 'react';
+import React, { useState } from 'react';
 import {
   View,
   Text,
@@ -16,34 +16,38 @@ import {
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { NativeStackScreenProps } from '@react-navigation/native-stack';
-import { AuthContext, RootStackParamList } from '../../App';
+import { useAuth } from '../../context/AuthContext';
+import { RootStackParamList } from '../../App';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'Login'>;
 
 const LoginScreen: React.FC<Props> = ({ navigation }) => {
-  const { login } = useContext(AuthContext);
-  const [mobileNumber, setMobileNumber] = useState('');
+  const { login } = useAuth();
+  const [email, setEmail] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState('');
 
   const handleSendOTP = async () => {
     setError('');
 
-    if (!mobileNumber) {
-      setError('Please enter your mobile number');
+    if (!email) {
+      setError('Please enter your email address');
       return;
     }
 
-    if (!/^\d{10}$/.test(mobileNumber)) {
-      setError('Please enter a valid 10-digit mobile number');
+    // Validate email format
+    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+    if (!emailRegex.test(email)) {
+      setError('Please enter a valid email address');
       return;
     }
 
     setIsLoading(true);
     try {
-      const result = await login(mobileNumber);
+      const result = await login(email);
       if (result.success) {
-        navigation.navigate('OTP', { mobileNumber });
+        // Navigate to OTP screen - user must enter OTP received via email
+        navigation.navigate('OTP', { email });
       } else {
         setError(result.message || 'Failed to send OTP. Please try again.');
       }
@@ -71,40 +75,34 @@ const LoginScreen: React.FC<Props> = ({ navigation }) => {
             </View>
             <Text style={styles.title}>Welcome to SIM Sync</Text>
             <Text style={styles.subtitle}>
-              Enter your mobile number to receive an OTP
+              Enter your email address to receive an OTP
             </Text>
           </View>
 
           {/* Form */}
           <View style={styles.form}>
-            <Text style={styles.label}>Mobile Number</Text>
-            <View style={styles.inputContainer}>
-              <View style={styles.countryCode}>
-                <Text style={styles.countryCodeText}>+91</Text>
-              </View>
-              <TextInput
-                style={styles.input}
-                value={mobileNumber}
-                onChangeText={text =>
-                  setMobileNumber(text.replace(/[^0-9]/g, ''))
-                }
-                placeholder="Enter 10 digit number"
-                placeholderTextColor="#64748B"
-                keyboardType="numeric"
-                maxLength={10}
-              />
-            </View>
+            <Text style={styles.label}>Email Address</Text>
+            <TextInput
+              style={styles.input}
+              value={email}
+              onChangeText={setEmail}
+              placeholder="Enter your email"
+              placeholderTextColor="#64748B"
+              keyboardType="email-address"
+              autoCapitalize="none"
+              autoCorrect={false}
+              autoComplete="email"
+            />
 
             {error ? <Text style={styles.errorText}>{error}</Text> : null}
 
             <TouchableOpacity
               style={[
                 styles.button,
-                (isLoading || mobileNumber.length < 10) &&
-                  styles.buttonDisabled,
+                (isLoading || !email) && styles.buttonDisabled,
               ]}
               onPress={handleSendOTP}
-              disabled={isLoading || mobileNumber.length < 10}
+              disabled={isLoading || !email}
             >
               {isLoading ? (
                 <ActivityIndicator color="#FFFFFF" />
@@ -179,35 +177,17 @@ const styles = StyleSheet.create({
     color: '#1E293B',
     marginBottom: 8,
   },
-  inputContainer: {
-    flexDirection: 'row',
-    alignItems: 'center',
+  input: {
     backgroundColor: '#F1F5F9',
     borderWidth: 1,
     borderColor: '#CBD5E1',
     borderRadius: 12,
     marginBottom: 16,
-    overflow: 'hidden',
-  },
-  countryCode: {
-    backgroundColor: '#E2E8F0',
     paddingHorizontal: 16,
     paddingVertical: 14,
-    borderRightWidth: 1,
-    borderRightColor: '#CBD5E1',
-  },
-  countryCodeText: {
     fontSize: 16,
-    fontWeight: '600',
-    color: '#64748B',
-  },
-  input: {
-    flex: 1,
-    fontSize: 18,
     fontWeight: '500',
     color: '#1E293B',
-    paddingHorizontal: 16,
-    paddingVertical: 14,
   },
   errorText: {
     fontSize: 12,

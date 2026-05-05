@@ -4,11 +4,11 @@
 export interface User {
   id: string;
   name: string;
-  mobileNumber: string;
   email: string;
+  mobileNumber?: string;
   role: 'super_admin' | 'admin' | 'user';
   companyId: string | null;
-  mobileVerified: boolean;
+  emailVerified: boolean;
   isActive: boolean;
   lastLogin: string | null;
   createdAt: string;
@@ -37,16 +37,36 @@ export interface OTPResponse {
 }
 
 /**
- * Login credentials
+ * Login credentials (Email-based)
  */
 export interface LoginCredentials {
-  mobileNumber: string;
+  email: string;
 }
 
 /**
- * OTP verification credentials
+ * OTP verification credentials (Email-based)
  */
 export interface OTPCredentials {
-  mobileNumber: string;
+  email: string;
   otp: string;
+}
+
+/**
+ * Token refresh response
+ */
+export interface TokenRefreshResponse {
+  success: boolean;
+  message: string;
+  token: string;
+  refreshToken?: string;
+}
+
+/**
+ * User profile response
+ */
+export interface ProfileResponse {
+  success: boolean;
+  data: {
+    user: User;
+  };
 }

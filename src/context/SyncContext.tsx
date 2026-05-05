@@ -1,13 +1,18 @@
 /**
- * Sync Context - Manages call log sync state
+ * Sync Context - Manages call log and SMS sync state
  * Integrates with native BackgroundSync module for background execution
+ * Updated for SIM-based sync
+ * Updated: Includes battery optimization check for reliable background execution
  */
 
 import React, { createContext, useContext, useState, useEffect, useCallback, useRef, ReactNode } from 'react';
 import { Platform, DeviceEventEmitter, NativeEventEmitter, NativeModules } from 'react-native';
 import { SyncService, SyncResult } from '../services/SyncService';
+import { SMSService } from '../services/SMSService';
 import { StorageService } from '../services/StorageService';
+import { SIMManager } from '../services/SIMManager';
 import { BackgroundSync } from '../native/BackgroundSyncModule';
+import { checkAndPromptBatteryOptimization } from '../utils/batteryOptimization';
 
 export type SyncStatus = 'idle' | 'syncing' | 'success' | 'error';
 
@@ -19,7 +24,15 @@ interface SyncContextValue {
   syncInterval: number;
   autoSyncEnabled: boolean;
   error: string | null;
+  matchedSIMs: number;
+  // SMS sync state
+  isSmsSyncing: boolean;
+  smsLastSyncTime: string | null;
+  smsSyncStatus: SyncStatus;
+  // Methods
   sync: () => Promise<SyncResult>;
+  syncSMS: () => Promise<{ success: boolean; synced: number; failed: number; message: string }>;
+  resetSmsSyncLock: () => void;
   setSyncInterval: (minutes: number) => Promise<void>;
   setAutoSyncEnabled: (enabled: boolean) => Promise<void>;
   refreshSyncState: () => Promise<void>;
@@ -39,6 +52,11 @@ export const SyncProvider: React.FC<SyncProviderProps> = ({ children }) => {
   const [syncInterval, setSyncIntervalState] = useState(5); // Default 5 minutes
   const [autoSyncEnabled, setAutoSyncEnabledState] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [matchedSIMs, setMatchedSIMs] = useState(0);
+  // SMS sync state
+  const [isSmsSyncing, setIsSmsSyncing] = useState(false);
+  const [smsLastSyncTime, setSmsLastSyncTime] = useState<string | null>(null);
+  const [smsSyncStatus, setSmsSyncStatus] = useState<SyncStatus>('idle');
 
   // Track the initial sync performed flag
   const initialSyncDone = useRef(false);
@@ -55,18 +73,28 @@ export const SyncProvider: React.FC<SyncProviderProps> = ({ children }) => {
         StorageService.isAutoSyncEnabled(),
       ]);
 
+      // Get matched SIM count
+      const sims = await SIMManager.getMatchedSIMs();
+      setMatchedSIMs(sims.length);
+
       if (lastSync) {
         setLastSyncTime(SyncService.formatLastSync(lastSync));
       }
       setPendingLogs(pending);
       setSyncIntervalState(interval);
       setAutoSyncEnabledState(autoEnabled);
+
+      // Get SMS last sync time
+      const smsLastSync = await SMSService.getLastSync();
+      if (smsLastSync) {
+        setSmsLastSyncTime(SMSService.formatLastSync(smsLastSync));
+      }
     } catch (err) {
       console.error('Error refreshing sync state:', err);
     }
   }, []);
 
-  // Manual sync
+  // Manual sync (call logs)
   const sync = useCallback(async (): Promise<SyncResult> => {
     if (isSyncing) {
       return {
@@ -113,6 +141,55 @@ export const SyncProvider: React.FC<SyncProviderProps> = ({ children }) => {
       setIsSyncing(false);
     }
   }, [isSyncing, pendingLogs, refreshSyncState]);
+
+  // Manual SMS sync
+  const syncSMS = useCallback(async (): Promise<{ success: boolean; synced: number; failed: number; message: string }> => {
+    if (isSmsSyncing) {
+      return {
+        success: false,
+        synced: 0,
+        failed: 0,
+        message: 'SMS sync already in progress',
+      };
+    }
+
+    setIsSmsSyncing(true);
+    setSmsSyncStatus('syncing');
+
+    try {
+      const result = await SMSService.sync();
+
+      if (result.success) {
+        setSmsSyncStatus('success');
+      } else {
+        setSmsSyncStatus('error');
+      }
+
+      // Refresh state
+      await refreshSyncState();
+
+      return result;
+    } catch (err: any) {
+      setSmsSyncStatus('error');
+      return {
+        success: false,
+        synced: 0,
+        failed: 0,
+        message: err.message || 'SMS sync failed',
+        error: err.message,
+      };
+    } finally {
+      setIsSmsSyncing(false);
+    }
+  }, [isSmsSyncing, refreshSyncState]);
+
+  // Reset SMS sync lock (if stuck)
+  const resetSmsSyncLock = useCallback(() => {
+    SMSService.resetSyncLock();
+    setIsSmsSyncing(false);
+    setSmsSyncStatus('idle');
+    console.log('[SyncContext] SMS sync lock reset');
+  }, []);
 
   // Start or stop the background sync service
   const updateBackgroundService = useCallback(async (enabled: boolean, interval: number) => {
@@ -162,13 +239,15 @@ export const SyncProvider: React.FC<SyncProviderProps> = ({ children }) => {
     await StorageService.setAutoSyncEnabled(enabled);
     setAutoSyncEnabledState(enabled);
 
-    if (enabled) {
-      // Perform initial sync when enabling
-      await sync();
-    }
-
     // Start or stop the background service
     await updateBackgroundService(enabled, syncInterval);
+
+    // If enabling, trigger a background sync (non-blocking)
+    // The sync will happen in the background via the service
+    if (enabled) {
+      // Don't await - let it run in background
+      sync().catch(err => console.error('[SyncContext] Auto-enable sync failed:', err));
+    }
   }, [sync, syncInterval, updateBackgroundService]);
 
   // Listen for background sync trigger events
@@ -177,53 +256,98 @@ export const SyncProvider: React.FC<SyncProviderProps> = ({ children }) => {
       return;
     }
 
-    const eventEmitter = new NativeEventEmitter(NativeModules.BackgroundSyncModule);
+    // Check if BackgroundSyncModule exists before creating event emitter
+    const { BackgroundSyncModule } = NativeModules;
+    if (!BackgroundSyncModule) {
+      console.warn('[SyncContext] BackgroundSyncModule not available');
+      return;
+    }
 
-    const subscription = eventEmitter.addListener('BackgroundSyncTrigger', async (data: { mobileNumber?: string; syncInterval?: number }) => {
-      console.log('[SyncContext] Received background sync trigger');
-      try {
-        await sync();
-        console.log('[SyncContext] Background sync completed');
-      } catch (err) {
-        console.error('[SyncContext] Background sync failed:', err);
-      }
+    const eventEmitter = new NativeEventEmitter(BackgroundSyncModule);
+
+    const subscription = eventEmitter.addListener('BackgroundSyncTrigger', (data: { simIds?: string[]; syncInterval?: number }) => {
+      console.log('[SyncContext] ========== BACKGROUND SYNC TRIGGERED ==========');
+      console.log('[SyncContext] Data received:', JSON.stringify(data));
+
+      // Run syncs SEQUENTIALLY (not parallel) to avoid JS context issues
+      setTimeout(async () => {
+        try {
+          console.log('[SyncContext] Starting CALL LOG sync...');
+          const callLogResult = await sync();
+          console.log('[SyncContext] Call log sync result:', JSON.stringify(callLogResult));
+        } catch (err) {
+          console.error('[SyncContext] Call log sync FAILED:', err);
+        }
+
+        try {
+          console.log('[SyncContext] Starting SMS sync...');
+          const smsResult = await syncSMS();
+          console.log('[SyncContext] SMS sync result:', JSON.stringify(smsResult));
+        } catch (err) {
+          console.error('[SyncContext] SMS sync FAILED:', err);
+        }
+
+        console.log('[SyncContext] ========== BACKGROUND SYNC COMPLETE ==========');
+      }, 0);
     });
 
     return () => {
       subscription.remove();
     };
-  }, [sync]);
+  }, [sync, syncSMS]);
 
   // Initial setup
   useEffect(() => {
     const initializeSync = async () => {
-      // Check if user is authenticated (has mobile number)
-      const mobileNumber = await StorageService.getMobileNumber();
-      if (!mobileNumber) {
-        // User not logged in, don't setup sync
+      // Check if user has matched SIMs or email (authenticated)
+      const [email, matchedSIMs] = await Promise.all([
+        StorageService.getEmail(),
+        SIMManager.getMatchedSIMs(),
+      ]);
+
+      if (!email && matchedSIMs.length === 0) {
+        // User not logged in and no matched SIMs, don't setup sync
+        console.log('[SyncContext] No authentication or SIMs found, skipping sync setup');
         return;
       }
 
-      // Set mobile number in native module
-      if (Platform.OS === 'android') {
-        await BackgroundSync.setMobileNumber(mobileNumber);
+      // NEW: Check battery optimization status for reliable background sync
+      try {
+        const batteryStatus = await checkAndPromptBatteryOptimization();
+        if (!batteryStatus.isIgnoring) {
+          console.warn('[SyncContext] Battery optimization is enabled. Background sync may be interrupted.');
+        }
+      } catch (error) {
+        console.warn('[SyncContext] Failed to check battery optimization:', error);
+      }
+
+      // Set up SIM IDs in native module for background sync
+      if (Platform.OS === 'android' && matchedSIMs.length > 0) {
+        const simIds = matchedSIMs.filter(sim => sim.isActive).map(sim => sim.simId);
+        if (simIds.length > 0) {
+          await BackgroundSync.setValidSIMIds(simIds);
+          console.log('[SyncContext] Set', simIds.length, 'SIM IDs for background sync');
+        }
+      }
+
+      // Set email in native module if available
+      if (Platform.OS === 'android' && email) {
+        await BackgroundSync.setUserEmail(email);
       }
 
       await refreshSyncState();
 
-      // Perform initial sync if auto-sync is enabled and we haven't synced yet
-      if (autoSyncEnabled && !initialSyncDone.current) {
-        initialSyncDone.current = true;
-        await sync();
-      }
-
       // Start background service if auto-sync is enabled
+      // NOTE: Removed initial sync on mount to prevent UI blocking
+      // Sync will happen in background via the foreground service
       if (autoSyncEnabled) {
         await updateBackgroundService(true, syncInterval);
       }
     };
 
-    initializeSync();
+    initializeSync().catch(err => {
+      console.error('[SyncContext] Initialization error:', err);
+    });
 
     // Cleanup on unmount
     return () => {
@@ -247,7 +371,14 @@ export const SyncProvider: React.FC<SyncProviderProps> = ({ children }) => {
     syncInterval,
     autoSyncEnabled,
     error,
+    matchedSIMs,
+    // SMS sync state
+    isSmsSyncing,
+    smsLastSyncTime,
+    smsSyncStatus,
     sync,
+    syncSMS,
+    resetSmsSyncLock,
     setSyncInterval,
     setAutoSyncEnabled,
     refreshSyncState,

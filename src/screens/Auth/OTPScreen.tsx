@@ -1,8 +1,9 @@
 /**
- * OTP Screen - Simple OTP verification
+ * OTP Screen - Email OTP verification
+ * User must manually enter OTP received via email
  */
 
-import React, { useState, useContext, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import {
   View,
   Text,
@@ -16,13 +17,14 @@ import {
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { NativeStackScreenProps } from '@react-navigation/native-stack';
-import { AuthContext, RootStackParamList } from '../../App';
+import { useAuth } from '../../context/AuthContext';
+import { RootStackParamList } from '../../App';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'OTP'>;
 
 const OTPScreen: React.FC<Props> = ({ route, navigation }) => {
-  const { mobileNumber } = route.params;
-  const { verifyOTP } = useContext(AuthContext);
+  const { email } = route.params;
+  const { verifyOTP, resendOTP } = useAuth();
   const [otp, setOtp] = useState(['', '', '', '', '', '']);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState('');
@@ -37,30 +39,52 @@ const OTPScreen: React.FC<Props> = ({ route, navigation }) => {
     }
   }, [countdown]);
 
+  // Auto-focus first input on mount
+  useEffect(() => {
+    inputRefs.current[0]?.focus();
+  }, []);
+
   const handleOTPChange = (text: string, index: number) => {
     const numericValue = text.replace(/[^0-9]/g, '');
+    const newOtp = [...otp];
 
     if (numericValue.length > 0) {
-      const newOtp = [...otp];
+      // User entered a number
       newOtp[index] = numericValue.slice(-1);
       setOtp(newOtp);
 
       // Auto focus next input
-      if (index < 5 && numericValue.length > 0) {
+      if (index < 5) {
         inputRefs.current[index + 1]?.focus();
       }
 
-      // Check if complete
+      // Check if complete - auto-verify when all 6 digits entered
       const otpValue = newOtp.join('');
       if (otpValue.length === 6) {
         handleVerify(otpValue);
+      }
+    } else {
+      // User deleted the character (backspace)
+      newOtp[index] = '';
+      setOtp(newOtp);
+
+      // Move focus to previous input if current is empty
+      if (index > 0) {
+        inputRefs.current[index - 1]?.focus();
       }
     }
   };
 
   const handleKeyPress = (key: string, index: number) => {
-    if (key === 'Backspace' && otp[index] === '' && index > 0) {
-      inputRefs.current[index - 1]?.focus();
+    // Handle backspace key press
+    if (key === 'Backspace') {
+      // If current field is empty, move to previous and clear it
+      if (otp[index] === '' && index > 0) {
+        const newOtp = [...otp];
+        newOtp[index - 1] = '';
+        setOtp(newOtp);
+        inputRefs.current[index - 1]?.focus();
+      }
     }
   };
 
@@ -71,8 +95,8 @@ const OTPScreen: React.FC<Props> = ({ route, navigation }) => {
     try {
       const result = await verifyOTP(otpValue);
       if (result.success) {
-        // Navigate to Permissions screen after OTP verification
-        navigation.navigate('Permission');
+        // Navigation is handled automatically by App.tsx when user state changes
+        // No need to navigate manually - the app will switch to authenticated screens
       } else {
         setError(result.message || 'Invalid OTP. Please try again.');
         setOtp(['', '', '', '', '', '']);
@@ -90,7 +114,14 @@ const OTPScreen: React.FC<Props> = ({ route, navigation }) => {
     setOtp(['', '', '', '', '', '']);
     setError('');
     inputRefs.current[0]?.focus();
-    // TODO: Call resend OTP API
+    try {
+      const result = await resendOTP();
+      if (!result.success) {
+        setError(result.message || 'Failed to resend OTP. Please try again.');
+      }
+    } catch (err) {
+      setError('Failed to resend OTP. Please try again.');
+    }
   };
 
   return (
@@ -108,7 +139,10 @@ const OTPScreen: React.FC<Props> = ({ route, navigation }) => {
             <Text style={styles.title}>Verify OTP</Text>
             <Text style={styles.subtitle}>
               Enter the 6-digit code sent to{'\n'}
-              <Text style={styles.phoneNumber}>+91 {mobileNumber}</Text>
+              <Text style={styles.emailText}>{email}</Text>
+            </Text>
+            <Text style={styles.hintText}>
+              Check your email inbox (and spam folder)
             </Text>
           </View>
 
@@ -157,12 +191,12 @@ const OTPScreen: React.FC<Props> = ({ route, navigation }) => {
             )}
           </View>
 
-          {/* Change Number */}
+          {/* Change Email */}
           <TouchableOpacity
-            style={styles.changeNumberContainer}
+            style={styles.changeEmailContainer}
             onPress={() => navigation.goBack()}
           >
-            <Text style={styles.changeNumberLink}>Change Mobile Number</Text>
+            <Text style={styles.changeEmailLink}>Change Email Address</Text>
           </TouchableOpacity>
         </ScrollView>
       </KeyboardAvoidingView>
@@ -199,9 +233,15 @@ const styles = StyleSheet.create({
     textAlign: 'center',
     lineHeight: 22,
   },
-  phoneNumber: {
+  emailText: {
     fontWeight: '600',
     color: '#1E293B',
+  },
+  hintText: {
+    fontSize: 12,
+    color: '#94A3B8',
+    marginTop: 8,
+    textAlign: 'center',
   },
   otpContainer: {
     flexDirection: 'row',
@@ -259,11 +299,11 @@ const styles = StyleSheet.create({
     color: '#3B82F6',
     fontWeight: '600',
   },
-  changeNumberContainer: {
+  changeEmailContainer: {
     alignItems: 'center',
     marginTop: 16,
   },
-  changeNumberLink: {
+  changeEmailLink: {
     fontSize: 14,
     color: '#3B82F6',
     fontWeight: '500',

@@ -3,17 +3,32 @@
     <!-- Network -->
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+    <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
+
+    <!-- Location - Required for WiFi SSID on Android 10+ -->
+    <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
+    <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
 
     <!-- Call Log Reading -->
     <uses-permission android:name="android.permission.READ_CALL_LOG" />
     <uses-permission android:name="android.permission.WRITE_CALL_LOG" />
 
+    <!-- SMS Reading -->
+    <uses-permission android:name="android.permission.READ_SMS" />
+
     <!-- Phone State -->
     <uses-permission android:name="android.permission.READ_PHONE_STATE" />
+    <uses-permission android:name="android.permission.READ_PHONE_NUMBERS" />
+
+    <!-- Call Automation Permissions [CALL AUTOMATION] -->
+    <uses-permission android:name="android.permission.CALL_PHONE" />
+    <uses-permission android:name="android.permission.ANSWER_PHONE_CALLS" />
+    <uses-permission android:name="android.permission.READ_CALL_LOG" />
 
     <!-- Foreground Service -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_PHONE_CALL" />
 
     <!-- Boot Receiver -->
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
@@ -23,6 +38,10 @@
 
     <!-- Wake Lock for background tasks -->
     <uses-permission android:name="android.permission.WAKE_LOCK" />
+
+    <!-- Exact Alarm Permission (Android 12+) [CALL AUTOMATION] -->
+    <uses-permission android:name="android.permission.SCHEDULE_EXACT_ALARM" />
+    <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
 
     <application
       android:name=".MainApplication"
@@ -55,6 +74,13 @@
         android:exported="false"
         android:foregroundServiceType="dataSync" />
 
+      <!-- Call Automation Foreground Service [CALL AUTOMATION] -->
+      <service
+        android:name=".services.CallAutomationForegroundService"
+        android:enabled="true"
+        android:exported="false"
+        android:foregroundServiceType="phoneCall" />
+
       <!-- Boot Receiver - Restarts sync service after device reboot -->
       <receiver
         android:name=".receivers.BootReceiver"
@@ -74,6 +100,23 @@
         android:exported="false">
         <intent-filter>
             <action android:name="com.sim_management.SYNC_TRIGGER" />
+        </intent-filter>
+      </receiver>
+
+      <!-- Headless JS Service for Background Sync -->
+      <service
+        android:name=".services.HeadlessSyncService"
+        android:enabled="true"
+        android:exported="false"
+        android:foregroundServiceType="dataSync" />
+
+      <!-- Sync Alarm Receiver - Triggers periodic sync -->
+      <receiver
+        android:name=".receivers.SyncAlarmReceiver"
+        android:enabled="true"
+        android:exported="false">
+        <intent-filter>
+            <action android:name="com.sim_management.SYNC_ALARM" />
         </intent-filter>
       </receiver>
 
