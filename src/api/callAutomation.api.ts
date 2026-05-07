@@ -34,8 +34,7 @@ export const callAutomationApi = {
    * @returns Call configuration with role and targets
    */
   getConfig: async (simNumber: string): Promise<{ success: boolean; data: CallConfigResponse }> => {
-    console.log('[CallAutomationAPI] Fetching config for SIM:', simNumber);
-
+    
     try {
       const response = await apiClient.get<{ success: boolean; data: CallConfigResponse }>(
         '/device/call-config',
@@ -44,7 +43,6 @@ export const callAutomationApi = {
         }
       );
 
-      console.log('[CallAutomationAPI] Config response:', response.data);
       return response.data;
     } catch (error: any) {
       console.error('[CallAutomationAPI] Error fetching config:', error.message);
@@ -66,7 +64,6 @@ export const callAutomationApi = {
     successCount?: number,
     failCount?: number
   ): Promise<{ success: boolean; data: CallCompleteResponse }> => {
-    console.log('[CallAutomationAPI] Notifying call complete:', { configId, simNumber, successCount, failCount });
 
     try {
       const response = await apiClient.post<{ success: boolean; data: CallCompleteResponse }>(

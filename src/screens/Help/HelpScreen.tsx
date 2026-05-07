@@ -131,7 +131,7 @@ const HelpScreen: React.FC = () => {
         </View>
 
         {/* Legal Links */}
-        <Text style={styles.sectionTitle}>Legal</Text>
+        {/* <Text style={styles.sectionTitle}>Legal</Text>
         <View style={styles.card}>
           <TouchableOpacity
             style={styles.legalItem}
@@ -148,7 +148,7 @@ const HelpScreen: React.FC = () => {
             <Text style={styles.legalTitle}>Terms of Service</Text>
             <Text style={styles.legalArrow}>→</Text>
           </TouchableOpacity>
-        </View>
+        </View> */}
 
         {/* App Info */}
         <View style={styles.appInfo}>

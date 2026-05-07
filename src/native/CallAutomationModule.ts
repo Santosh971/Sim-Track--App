@@ -112,11 +112,7 @@ export const CallAutomation: CallAutomationModuleInterface = {
       return { success: false, error: 'Only supported on Android' };
     }
 
-    console.log('[CallAutomation] Making call:', {
-      phoneNumber,
-      simSlotIndex,
-      durationSeconds
-    });
+   
 
     try {
       const result = await CallAutomationModule.makeCall(phoneNumber, simSlotIndex, durationSeconds);

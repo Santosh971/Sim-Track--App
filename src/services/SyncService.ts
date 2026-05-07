@@ -41,18 +41,15 @@ export const SyncService = {
    * Syncs call logs for each matched SIM separately using simId
    */
   async sync(): Promise<SyncResult> {
-    console.log('[SyncService] Starting sync...');
 
     // Check if sync lock is stale (stuck for more than 5 minutes)
     const now = Date.now();
     if (isSyncInProgress && (now - syncLockTime) > SYNC_LOCK_TIMEOUT) {
-      console.log('[SyncService] Sync lock is stale, releasing it');
       isSyncInProgress = false;
     }
 
     // Prevent multiple simultaneous syncs
     if (isSyncInProgress) {
-      console.log('[SyncService] Sync already in progress, skipping');
       return {
         success: false,
         synced: 0,
@@ -68,14 +65,10 @@ export const SyncService = {
     try {
       // Get matched SIMs
       const matchedSIMs = await SIMManager.getMatchedSIMs();
-      console.log('[SyncService] Matched SIMs:', matchedSIMs.length, matchedSIMs.map(s => ({
-        simId: s.simId,
-        phone: s.phoneNumber
-      })));
+    
 
       if (matchedSIMs.length === 0) {
         // Fall back to legacy sync if no matched SIMs
-        console.log('[SyncService] No matched SIMs, using legacy sync');
         return this.legacySync();
       }
 
@@ -117,14 +110,7 @@ export const SyncService = {
     // Virtual SIMs (isFromDevice: false): Matched from company data
     const activeSIMs = matchedSIMs.filter(sim => sim.isActive);
 
-    console.log('[SyncService] Matched SIMs:', matchedSIMs.length);
-    console.log('[SyncService] Active SIMs for call log sync:', activeSIMs.length, activeSIMs.map(s => ({
-      simId: s.simId,
-      phone: s.phoneNumber,
-      iccid: s.iccid,
-      slotIndex: s.slotIndex,
-      isFromDevice: s.isFromDevice
-    })));
+  
 
     if (activeSIMs.length === 0) {
       return {
@@ -137,7 +123,6 @@ export const SyncService = {
 
     // Sync for each active SIM
     for (const sim of activeSIMs) {
-      console.log(`[SyncService] Syncing for SIM: ${sim.phoneNumber} (slot ${sim.slotIndex}, isFromDevice: ${sim.isFromDevice})`);
       const result = await this.syncBySIM(sim);
       simResults[sim.simId] = result;
 
@@ -198,11 +183,9 @@ export const SyncService = {
 
       // Use simId (MongoDB ObjectId) for API call
       const simId = sim.simId;
-      console.log(`[SyncService] Syncing ${allLogs.length} logs for SIM ${simId} (${sim.phoneNumber})`);
 
       // Batch logs to avoid network errors (max 500 per request)
       const batches = this.batchLogs(allLogs, MAX_LOGS_PER_REQUEST);
-      console.log(`[SyncService] Split into ${batches.length} batches of max ${MAX_LOGS_PER_REQUEST} logs`);
 
       let totalSynced = 0;
       let totalFailed = 0;

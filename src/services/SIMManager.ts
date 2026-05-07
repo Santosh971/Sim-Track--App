@@ -39,7 +39,6 @@ export const SIMManager = {
 
     try {
       const sims = await SIMDetection.getDeviceSIMs();
-      console.log('[SIMManager] Device SIMs:', JSON.stringify(sims, null, 2));
       return sims;
     } catch (error) {
       console.error('[SIMManager] Error getting device SIMs:', error);
@@ -157,14 +156,11 @@ export const SIMManager = {
    * Works automatically even if device doesn't return phone numbers
    */
   async detectAndMatchSIMs(): Promise<SIMDetectionResult> {
-    console.log('[SIMManager] Starting SIM detection...');
 
     // Get company SIMs from API
     const companySIMs = await this.fetchCompanySIMs();
-    console.log('[SIMManager] Company SIMs from API:', companySIMs.length);
 
     if (companySIMs.length === 0) {
-      console.log('[SIMManager] No company SIMs assigned to user');
       return {
         deviceSIMs: [],
         matchedSIMs: [],
@@ -174,22 +170,18 @@ export const SIMManager = {
 
     // Get device SIMs from native module
     const deviceSIMs = await this.getDeviceSIMs();
-    console.log('[SIMManager] Device SIMs detected:', deviceSIMs.length);
 
     // Try matching by phone number first
     let matchedSIMs = this.matchSIMs(companySIMs, deviceSIMs);
-    console.log('[SIMManager] Matched by phone number:', matchedSIMs.length);
 
     // If no matches, try ICCID matching
     if (matchedSIMs.length === 0) {
       matchedSIMs = this.matchSIMsByICCID(companySIMs, deviceSIMs);
-      console.log('[SIMManager] Matched by ICCID:', matchedSIMs.length);
     }
 
     // If still no matches, use virtual matching (company SIMs without device matching)
     if (matchedSIMs.length === 0 && companySIMs.length > 0) {
       matchedSIMs = this.createVirtualMatchedSIMs(companySIMs);
-      console.log('[SIMManager] Using virtual matched SIMs (fallback):', matchedSIMs.length);
     }
 
     // Find unmatched device SIMs
@@ -202,7 +194,6 @@ export const SIMManager = {
     // Generate and store device ID if not exists
     await this.ensureDeviceId();
 
-    console.log('[SIMManager] Final matched SIMs:', matchedSIMs.length);
 
     return {
       deviceSIMs,

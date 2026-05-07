@@ -301,6 +301,38 @@ class BackgroundSyncModule(reactContext: ReactApplicationContext) : ReactContext
     }
 
     // ============================================
+    // API Configuration Methods
+    // ============================================
+
+    /**
+     * Set API Base URL for native modules
+     * This allows native code to use the same URL as JS
+     */
+    @ReactMethod
+    fun setApiBaseUrl(url: String, promise: Promise) {
+        try {
+            prefs.setApiBaseUrl(url)
+            Log.d(TAG, "API Base URL set: $url")
+            promise.resolve(true)
+        } catch (e: Exception) {
+            promise.reject("ERROR", "Failed to set API URL: ${e.message}")
+        }
+    }
+
+    /**
+     * Get stored API Base URL
+     */
+    @ReactMethod
+    fun getApiBaseUrl(promise: Promise) {
+        try {
+            val url = prefs.getApiBaseUrl()
+            promise.resolve(url)
+        } catch (e: Exception) {
+            promise.reject("ERROR", "Failed to get API URL: ${e.message}")
+        }
+    }
+
+    // ============================================
     // WiFi Speed Test Methods
     // ============================================
 

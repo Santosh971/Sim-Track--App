@@ -33,6 +33,10 @@ export const WiFiProvider: React.FC<WiFiProviderProps> = ({ children }) => {
   // NEW: Battery optimization state
   const [isBatteryOptimized, setIsBatteryOptimized] = useState(false);
 
+  // NEW: Track if current WiFi is registered for this user/SIM
+  const [isCurrentWifiRegistered, setIsCurrentWifiRegistered] = useState<boolean | null>(null);
+  const [currentWifiSSID, setCurrentWifiSSID] = useState<string | null>(null);
+
   // Track if initialized
   const initializedRef = useRef(false);
   const companyIdRef = useRef<string | null>(null);
@@ -44,9 +48,7 @@ export const WiFiProvider: React.FC<WiFiProviderProps> = ({ children }) => {
    * companyId parameter kept for backward compatibility but not used in new flow
    */
   const initialize = useCallback(async (companyId: string) => {
-    console.log('[WiFiContext] Initializing WiFi monitoring...');
-    console.log('[WiFiContext] Company ID received (kept for backward compatibility):', companyId);
-
+   
     setStatus('idle');
     setError(null);
     companyIdRef.current = companyId;
@@ -80,13 +82,14 @@ export const WiFiProvider: React.FC<WiFiProviderProps> = ({ children }) => {
             setWifiName(selectedSim.wifiConfig[0].wifiName || 'WiFi Network');
           }
 
-          console.log('[WiFiContext] Device active, ready for monitoring');
+          // Validate current WiFi against registered config
+          await validateCurrentWifi();
+
         } else {
           // Authentication failed or not allowed
           setIsActive(false);
           setStatus('error');
           setError(result.message);
-          console.log('[WiFiContext] Device not active:', result.message);
         }
 
         // Get last speed test if available
@@ -108,6 +111,105 @@ export const WiFiProvider: React.FC<WiFiProviderProps> = ({ children }) => {
 
     initializedRef.current = true;
   }, []);
+
+  /**
+   * Validate current WiFi against registered config
+   * Returns true if current WiFi is registered for this user/SIM
+   */
+  const validateCurrentWifi = useCallback(async (): Promise<{
+    isRegistered: boolean;
+    ssid: string | null;
+    matchedConfig: any | null;
+  }> => {
+    console.log('[WiFiContext] Validating current WiFi...');
+
+    try {
+      // Get current WiFi info from device
+      const wifiInfo = await WiFiService.getCurrentWiFiInfo();
+      console.log('[WiFiContext] Current WiFi info:', {
+        ssid: wifiInfo.ssid,
+        isConnected: wifiInfo.isConnected,
+        hasValidSSID: wifiInfo.hasValidSSID,
+      });
+
+      if (!wifiInfo.isConnected || !wifiInfo.hasValidSSID || !wifiInfo.ssid) {
+        console.log('[WiFiContext] Not connected to WiFi or invalid SSID');
+        setIsCurrentWifiRegistered(false);
+        setCurrentWifiSSID(null);
+        return { isRegistered: false, ssid: null, matchedConfig: null };
+      }
+
+      setCurrentWifiSSID(wifiInfo.ssid);
+
+      // Get registered WiFi config from stored SIM data
+      const selectedSim = await WiFiService.getSelectedSimData();
+
+      if (!selectedSim || !selectedSim.wifiConfig || selectedSim.wifiConfig.length === 0) {
+        console.log('[WiFiContext] No WiFi config registered');
+        setIsCurrentWifiRegistered(false);
+        return { isRegistered: false, ssid: wifiInfo.ssid, matchedConfig: null };
+      }
+
+      // Check if current WiFi matches any registered config
+      const matchedConfig = WiFiService.matchWiFiWithConfig(
+        wifiInfo.ssid,
+        wifiInfo.bssid,
+        selectedSim.wifiConfig
+      );
+
+      const isRegistered = matchedConfig !== null;
+      console.log('[WiFiContext] Current WiFi registered:', isRegistered, 'SSID:', wifiInfo.ssid);
+
+      setIsCurrentWifiRegistered(isRegistered);
+      return { isRegistered, ssid: wifiInfo.ssid, matchedConfig };
+    } catch (err: any) {
+      console.error('[WiFiContext] Error validating current WiFi:', err);
+      setIsCurrentWifiRegistered(false);
+      return { isRegistered: false, ssid: null, matchedConfig: null };
+    }
+  }, []);
+
+  /**
+   * Reinitialize WiFi monitoring
+   * Clears all stored data and re-authenticates with the server
+   * Use this when switching WiFi networks to get updated config from admin panel
+   */
+  const reinitialize = useCallback(async (companyId: string) => {
+    console.log('[WiFiContext] Reinitializing WiFi monitoring...');
+
+    // Stop any active monitoring
+    stopMonitoring();
+
+    // Clear current state
+    setDeviceId(null);
+    setWifiId(null);
+    setWifiName(null);
+    setIsActive(false);
+    setLastSpeedTest(null);
+    setStatus('idle');
+    setError(null);
+    setIsCurrentWifiRegistered(null);
+    setCurrentWifiSSID(null);
+
+    try {
+      // Clear stored WiFi data
+      await WiFiService.clearSelectedSimData();
+      console.log('[WiFiContext] Cleared stored WiFi data');
+
+      // Re-initialize (will re-authenticate with server)
+      await initialize(companyId);
+
+      // Validate current WiFi after reinitialization
+      const wifiValidation = await validateCurrentWifi();
+      console.log('[WiFiContext] WiFi validation result:', wifiValidation);
+
+      console.log('[WiFiContext] Reinitialization complete');
+    } catch (err: any) {
+      console.error('[WiFiContext] Reinitialization error:', err);
+      setStatus('error');
+      setError(err.message || 'Failed to reinitialize WiFi monitoring');
+    }
+  }, [initialize, stopMonitoring, validateCurrentWifi]);
 
   /**
    * Refresh device status
@@ -148,7 +250,6 @@ export const WiFiProvider: React.FC<WiFiProviderProps> = ({ children }) => {
    * FIXED: Better error handling for WiFi connection issues
    */
   const runSpeedTest = useCallback(async (): Promise<SpeedTestResult> => {
-    console.log('[WiFiContext] Running manual speed test...');
 
     try {
       const result = await WiFiService.performSpeedTest();
@@ -187,7 +288,6 @@ export const WiFiProvider: React.FC<WiFiProviderProps> = ({ children }) => {
       return;
     }
 
-    console.log('[WiFiContext] Starting background monitoring');
     setIsMonitoring(true);
 
     WiFiService.startBackgroundMonitoring();
@@ -198,7 +298,6 @@ export const WiFiProvider: React.FC<WiFiProviderProps> = ({ children }) => {
    * UNCHANGED
    */
   const stopMonitoring = useCallback(() => {
-    console.log('[WiFiContext] Stopping background monitoring');
     setIsMonitoring(false);
 
     WiFiService.stopBackgroundMonitoring();
@@ -217,7 +316,6 @@ export const WiFiProvider: React.FC<WiFiProviderProps> = ({ children }) => {
   // Auto-start monitoring when active
   useEffect(() => {
     if (status === 'active' && !isMonitoring && initializedRef.current) {
-      console.log('[WiFiContext] Device active, auto-starting monitoring');
       startMonitoring();
     }
   }, [status, isMonitoring, startMonitoring]);
@@ -227,13 +325,12 @@ export const WiFiProvider: React.FC<WiFiProviderProps> = ({ children }) => {
   // Cleanup on unmount
   useEffect(() => {
     return () => {
-      console.log('[WiFiContext] Cleaning up');
       WiFiService.stopBackgroundMonitoring();
       WiFiService.stopStatusPolling();
     };
   }, []);
 
-  // Context value (UNCHANGED structure - backward compatible)
+  // Context value (backward compatible)
   const value: WiFiContextValue = {
     deviceId,
     isActive,
@@ -243,11 +340,15 @@ export const WiFiProvider: React.FC<WiFiProviderProps> = ({ children }) => {
     lastSpeedTest,
     status,
     error,
+    isCurrentWifiRegistered,
+    currentWifiSSID,
     initialize,
+    reinitialize,
     startMonitoring,
     stopMonitoring,
     runSpeedTest,
     refreshStatus,
+    validateCurrentWifi,
   };
 
   return <WiFiContext.Provider value={value}>{children}</WiFiContext.Provider>;

@@ -57,11 +57,9 @@ export const simApi = {
    * Response: { success: true, data: [{ _id, mobileNumber, operator, ... }] }
    */
   getMySIMs: async (): Promise<CompanySIM[]> => {
-    console.log('[SimAPI] Fetching company SIMs...');
     try {
       const response = await apiClient.get<SIMsApiResponse>('/sims/my');
 
-      console.log('[SimAPI] Raw response:', JSON.stringify(response.data, null, 2));
 
       // Extract SIMs array from response.data.data
       const rawSIMs = response.data?.data || [];
@@ -72,7 +70,6 @@ export const simApi = {
       }
 
       const sims = rawSIMs.map(mapSIMResponse);
-      console.log('[SimAPI] Mapped', sims.length, 'company SIMs:', sims.map(s => ({ id: s.id, phone: s.phoneNumber })));
       return sims;
     } catch (error: any) {
       console.error('[SimAPI] Error fetching SIMs:', error.message);

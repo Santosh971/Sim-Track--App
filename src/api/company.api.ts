@@ -12,10 +12,8 @@ export const companyApi = {
    * API: GET /company/my
    */
   getMyCompany: async (): Promise<Company | null> => {
-    console.log('[CompanyAPI] Fetching user\'s company...');
     try {
       const response = await apiClient.get<CompanyResponse>('/company/my');
-      console.log('[CompanyAPI] Response:', response.data);
 
       if (response.data?.success && response.data?.data) {
         // Handle if data is the raw object or already mapped
@@ -42,10 +40,8 @@ export const companyApi = {
    * API: GET /company/details/:id
    */
   getCompanyById: async (companyId: string): Promise<Company | null> => {
-    console.log('[CompanyAPI] Fetching company by ID:', companyId);
     try {
       const response = await apiClient.get<CompanyResponse>(`/company/details/${companyId}`);
-      console.log('[CompanyAPI] Response:', response.data);
 
       if (response.data?.success && response.data?.data) {
         const rawData = response.data.data as RawCompanyResponse | Company;

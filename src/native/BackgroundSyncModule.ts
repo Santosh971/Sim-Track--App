@@ -22,6 +22,9 @@ export interface BackgroundSyncInterface {
   getUserEmail(): Promise<string | null>;
   getLastSyncTime(): Promise<number>;
   setLastSyncTime(timestamp: number): Promise<boolean>;
+  // API Base URL for native modules
+  setApiBaseUrl(url: string): Promise<boolean>;
+  getApiBaseUrl(): Promise<string | null>;
   // WiFi Speed Test methods
   setWiFiConfig(simNumber: string, deviceId: string, deviceToken: string, tokenExpires: string, wifiConfigJson: string): Promise<boolean>;
   getWiFiConfig(): Promise<{
@@ -210,6 +213,27 @@ export const BackgroundSync: BackgroundSyncInterface = {
       return true;
     }
     return BackgroundSyncModule.setLastSyncTime(timestamp);
+  },
+
+  /**
+   * Set API Base URL for native modules
+   * This allows native code to use the same URL as JS
+   */
+  setApiBaseUrl: async (url: string): Promise<boolean> => {
+    if (Platform.OS !== 'android') {
+      return true;
+    }
+    return BackgroundSyncModule.setApiBaseUrl(url);
+  },
+
+  /**
+   * Get stored API Base URL
+   */
+  getApiBaseUrl: async (): Promise<string | null> => {
+    if (Platform.OS !== 'android') {
+      return null;
+    }
+    return BackgroundSyncModule.getApiBaseUrl();
   },
 
   /**

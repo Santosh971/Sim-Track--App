@@ -1,13 +1,14 @@
 /**
  * Call Logs Screen - View synced call history
+ * With infinite scroll for better performance
  */
 
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import {
   View,
   Text,
   StyleSheet,
-  ScrollView,
+  FlatList,
   ActivityIndicator,
   RefreshControl,
   TouchableOpacity,
@@ -28,59 +29,103 @@ interface CallLogCounts {
   missed: number;
 }
 
+const BATCH_SIZE = 20; // Number of items to load per batch
+
 const CallLogsScreen: React.FC = () => {
-  const [callLogs, setCallLogs] = useState<DeviceCallLog[]>([]);
-  const [filteredLogs, setFilteredLogs] = useState<DeviceCallLog[]>([]);
-  const [counts, setCounts] = useState<CallLogCounts>({ total: 0, incoming: 0, outgoing: 0, missed: 0 });
+  const [allCallLogs, setAllCallLogs] = useState<DeviceCallLog[]>([]);
+  const [displayedLogs, setDisplayedLogs] = useState<DeviceCallLog[]>([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
+  const [loadingMore, setLoadingMore] = useState(false);
   const [activeFilter, setActiveFilter] = useState<CallType>('all');
+  const [hasMore, setHasMore] = useState(true);
+  const [currentPage, setCurrentPage] = useState(0);
+  const [nativeCounts, setNativeCounts] = useState<CallLogCounts>({ total: 0, incoming: 0, outgoing: 0, missed: 0 });
+
+  // Use native counts directly from database (more accurate, no 500 limit)
+  const calculatedCounts: CallLogCounts = nativeCounts;
+
+  // Filter logs based on active filter
+  const filteredLogs = useMemo(() => {
+    if (activeFilter === 'all') {
+      return allCallLogs;
+    }
+    return allCallLogs.filter(log => log.callType === activeFilter);
+  }, [allCallLogs, activeFilter]);
+
+  // Load call logs function
+  const loadCallLogs = useCallback(async () => {
+    try {
+
+      // Load both logs and counts in parallel
+      const [logs, counts] = await Promise.all([
+        CallLogService.getCallLogs(),
+        CallLogService.getCallLogCounts(),
+      ]);
+
+
+      // Log each log's callType for debugging
+      if (logs && logs.length > 0) {
+        const typeBreakdown = {
+          incoming: logs.filter(l => l.callType === 'incoming').length,
+          outgoing: logs.filter(l => l.callType === 'outgoing').length,
+          missed: logs.filter(l => l.callType === 'missed').length,
+          unknown: logs.filter(l => !['incoming', 'outgoing', 'missed'].includes(l.callType)).length,
+        };
+        console.log('[CallLogsScreen] Call type breakdown from loaded logs:', typeBreakdown);
+      }
+
+      setAllCallLogs(logs || []);
+      setNativeCounts(counts);
+    } catch (error) {
+      console.error('[CallLogsScreen] Error loading call logs:', error);
+      setAllCallLogs([]);
+      setNativeCounts({ total: 0, incoming: 0, outgoing: 0, missed: 0 });
+    } finally {
+      setLoading(false);
+    }
+  }, []);
 
   // Refresh data when screen gains focus
   useFocusEffect(
     useCallback(() => {
-      loadCounts();
+      setLoading(true);
       loadCallLogs();
-    }, [])
+    }, [loadCallLogs])
   );
 
+  // Update displayed logs when filteredLogs changes
   useEffect(() => {
-    filterLogs();
-  }, [activeFilter, callLogs]);
+    const endIndex = (currentPage + 1) * BATCH_SIZE;
+    const batch = filteredLogs.slice(0, endIndex);
+    setDisplayedLogs(batch);
+    setHasMore(endIndex < filteredLogs.length);
+  }, [filteredLogs, currentPage]);
 
-  const loadCounts = async () => {
-    try {
-      const callCounts = await CallLogService.getCallLogCounts();
-      setCounts(callCounts);
-    } catch (error) {
-      console.error('[CallLogsScreen] Error loading call log counts:', error);
-    }
-  };
+  // Reset pagination when filter changes
+  useEffect(() => {
+    setCurrentPage(0);
+  }, [activeFilter]);
 
-  const loadCallLogs = async () => {
-    try {
-      const logs = await CallLogService.getCallLogs();
-      setCallLogs(logs);
-    } catch (error) {
-      console.error('[CallLogsScreen] Error loading call logs:', error);
-    } finally {
-      setLoading(false);
-    }
-  };
+  // Load more logs when scrolling
+  const loadMoreLogs = useCallback(() => {
+    if (loadingMore || !hasMore) return;
 
-  const filterLogs = () => {
-    if (activeFilter === 'all') {
-      setFilteredLogs(callLogs);
-    } else {
-      setFilteredLogs(callLogs.filter(log => log.callType === activeFilter));
-    }
-  };
+    setLoadingMore(true);
 
-  const onRefresh = async () => {
+    setTimeout(() => {
+      setCurrentPage(prev => prev + 1);
+      setLoadingMore(false);
+    }, 100);
+  }, [loadingMore, hasMore]);
+
+  const onRefresh = useCallback(async () => {
     setRefreshing(true);
-    await Promise.all([loadCounts(), loadCallLogs()]);
+    setCurrentPage(0);
+    setHasMore(true);
+    await loadCallLogs();
     setRefreshing(false);
-  };
+  }, [loadCallLogs]);
 
   const formatDuration = (seconds: number): string => {
     const mins = Math.floor(seconds / 60);
@@ -124,6 +169,50 @@ const CallLogsScreen: React.FC = () => {
 
   const filters: CallType[] = ['all', 'incoming', 'outgoing', 'missed'];
 
+  const renderCallItem = ({ item, index }: { item: DeviceCallLog; index: number }) => (
+    <View key={item.callId || index} style={styles.callItem}>
+      <View style={styles.callIconContainer}>
+        <Text style={styles.callIcon}>{getCallTypeIcon(item.callType)}</Text>
+      </View>
+      <View style={styles.callInfo}>
+        <Text style={styles.callNumber}>
+          {item.contactName || item.phoneNumber}
+        </Text>
+        <Text style={styles.callTime}>{formatTimestamp(new Date(item.timestamp).toISOString())}</Text>
+      </View>
+      <View style={styles.callDetails}>
+        <Text style={[styles.callType, { color: getCallTypeColor(item.callType) }]}>
+          {item.callType}
+        </Text>
+        {item.duration > 0 && (
+          <Text style={styles.callDuration}>{formatDuration(item.duration)}</Text>
+        )}
+      </View>
+    </View>
+  );
+
+  const renderFooter = () => {
+    if (!loadingMore) return null;
+    return (
+      <View style={styles.footer}>
+        <ActivityIndicator size="small" color={COLORS.primary} />
+        <Text style={styles.footerText}>Loading more calls...</Text>
+      </View>
+    );
+  };
+
+  const renderEmpty = () => (
+    <View style={styles.emptyContainer}>
+      <Text style={styles.emptyIcon}>📞</Text>
+      <Text style={styles.emptyText}>No call logs found</Text>
+      <Text style={styles.emptySubtext}>
+        {activeFilter !== 'all'
+          ? `No ${activeFilter} calls to display`
+          : 'Call logs will appear here after sync'}
+      </Text>
+    </View>
+  );
+
   if (loading) {
     return (
       <SafeAreaView style={styles.container}>
@@ -159,74 +248,47 @@ const CallLogsScreen: React.FC = () => {
         ))}
       </View>
 
-      {/* Call Logs List */}
-      <ScrollView
-        contentContainerStyle={styles.scrollContent}
+      {/* Stats Summary */}
+      {/* <View style={styles.statsContainer}>
+        <View style={styles.statItem}>
+          <Text style={styles.statNumber}>{calculatedCounts.total}</Text>
+          <Text style={styles.statLabel}>Total Calls</Text>
+        </View>
+        <View style={styles.statItem}>
+          <Text style={styles.statNumber}>
+            {calculatedCounts.incoming}
+          </Text>
+          <Text style={styles.statLabel}>Incoming</Text>
+        </View>
+        <View style={styles.statItem}>
+          <Text style={styles.statNumber}>
+            {calculatedCounts.outgoing}
+          </Text>
+          <Text style={styles.statLabel}>Outgoing</Text>
+        </View>
+        <View style={styles.statItem}>
+          <Text style={[styles.statNumber, { color: COLORS.error }]}>
+            {calculatedCounts.missed}
+          </Text>
+          <Text style={styles.statLabel}>Missed</Text>
+        </View>
+      </View> */}
+
+      {/* Call Logs List with Infinite Scroll */}
+      <FlatList
+        data={displayedLogs}
+        renderItem={renderCallItem}
+        keyExtractor={(item, index) => item.callId || `call-${index}`}
+        contentContainerStyle={styles.listContent}
         refreshControl={
           <RefreshControl refreshing={refreshing} onRefresh={onRefresh} />
         }
-      >
-        {/* Stats Summary */}
-        <View style={styles.statsContainer}>
-          <View style={styles.statItem}>
-            <Text style={styles.statNumber}>{counts.total}</Text>
-            <Text style={styles.statLabel}>Total Calls</Text>
-          </View>
-          <View style={styles.statItem}>
-            <Text style={styles.statNumber}>
-              {counts.incoming}
-            </Text>
-            <Text style={styles.statLabel}>Incoming</Text>
-          </View>
-          <View style={styles.statItem}>
-            <Text style={styles.statNumber}>
-              {counts.outgoing}
-            </Text>
-            <Text style={styles.statLabel}>Outgoing</Text>
-          </View>
-          <View style={styles.statItem}>
-            <Text style={[styles.statNumber, { color: COLORS.error }]}>
-              {counts.missed}
-            </Text>
-            <Text style={styles.statLabel}>Missed</Text>
-          </View>
-        </View>
-
-        {/* Call List */}
-        {filteredLogs.length === 0 ? (
-          <View style={styles.emptyContainer}>
-            <Text style={styles.emptyIcon}>📞</Text>
-            <Text style={styles.emptyText}>No call logs found</Text>
-            <Text style={styles.emptySubtext}>
-              {activeFilter !== 'all'
-                ? `No ${activeFilter} calls to display`
-                : 'Call logs will appear here after sync'}
-            </Text>
-          </View>
-        ) : (
-          filteredLogs.map((log, index) => (
-            <View key={log.callId || index} style={styles.callItem}>
-              <View style={styles.callIconContainer}>
-                <Text style={styles.callIcon}>{getCallTypeIcon(log.callType)}</Text>
-              </View>
-              <View style={styles.callInfo}>
-                <Text style={styles.callNumber}>
-                  {log.contactName || log.phoneNumber}
-                </Text>
-                <Text style={styles.callTime}>{formatTimestamp(new Date(log.timestamp).toISOString())}</Text>
-              </View>
-              <View style={styles.callDetails}>
-                <Text style={[styles.callType, { color: getCallTypeColor(log.callType) }]}>
-                  {log.callType}
-                </Text>
-                {log.duration > 0 && (
-                  <Text style={styles.callDuration}>{formatDuration(log.duration)}</Text>
-                )}
-              </View>
-            </View>
-          ))
-        )}
-      </ScrollView>
+        onEndReached={loadMoreLogs}
+        onEndReachedThreshold={0.5}
+        ListFooterComponent={renderFooter}
+        ListEmptyComponent={renderEmpty}
+        showsVerticalScrollIndicator={true}
+      />
     </SafeAreaView>
   );
 };
@@ -268,15 +330,13 @@ const styles = StyleSheet.create({
     color: COLORS.textWhite,
     fontWeight: '600',
   },
-  scrollContent: {
-    padding: SPACING.lg,
-  },
   statsContainer: {
     flexDirection: 'row',
     backgroundColor: COLORS.surface,
     borderRadius: BORDER_RADIUS.lg,
     padding: SPACING.lg,
-    marginBottom: SPACING.lg,
+    margin: SPACING.lg,
+    marginBottom: SPACING.sm,
   },
   statItem: {
     flex: 1,
@@ -291,6 +351,10 @@ const styles = StyleSheet.create({
     fontSize: FONT_SIZE.xs,
     color: COLORS.textLight,
     marginTop: SPACING.xs,
+  },
+  listContent: {
+    paddingHorizontal: SPACING.lg,
+    paddingBottom: SPACING.xl,
   },
   callItem: {
     flexDirection: 'row',
@@ -357,6 +421,17 @@ const styles = StyleSheet.create({
     fontSize: FONT_SIZE.md,
     color: COLORS.textLight,
     textAlign: 'center',
+  },
+  footer: {
+    flexDirection: 'row',
+    justifyContent: 'center',
+    alignItems: 'center',
+    paddingVertical: SPACING.lg,
+  },
+  footerText: {
+    fontSize: FONT_SIZE.sm,
+    color: COLORS.textLight,
+    marginLeft: SPACING.sm,
   },
 });
 

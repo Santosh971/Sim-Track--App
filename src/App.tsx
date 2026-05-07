@@ -1,6 +1,7 @@
 /**
  * Main App Component - Navigation structure with Bottom Tab Navigation
  * Updated for Email OTP authentication with tab-based main app
+ * Updated with professional vector icons
  */
 
 import React, { useState, useEffect, useRef } from 'react';
@@ -9,6 +10,7 @@ import { SafeAreaProvider, SafeAreaView } from 'react-native-safe-area-context';
 import { NavigationContainer, NavigationContainerRef } from '@react-navigation/native';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
+import Icon from 'react-native-vector-icons/Feather';
 
 // Screens
 import LoginScreen from './screens/Auth/LoginScreen';
@@ -55,9 +57,14 @@ const Tab = createBottomTabNavigator<MainTabParamList>();
 // Export AuthContext for use in screens (re-export from AuthContext.tsx)
 export { useAuth } from './context/AuthContext';
 
-// Tab Bar Icon Component
-const TabBarIcon: React.FC<{ icon: string; focused: boolean }> = ({ icon, focused }) => (
-  <Text style={[styles.tabIcon, focused && styles.tabIconActive]}>{icon}</Text>
+// Tab Bar Icon Component - Using professional vector icons
+const TabBarIcon: React.FC<{ name: string; focused: boolean }> = ({ name, focused }) => (
+  <Icon
+    name={name}
+    size={24}
+    color={focused ? COLORS.primary : COLORS.textLight}
+    style={focused ? styles.tabIconActive : undefined}
+  />
 );
 
 // Main Tab Navigator
@@ -80,7 +87,7 @@ const MainTabNavigator: React.FC = () => {
         component={DashboardScreen}
         options={{
           title: 'Home',
-          tabBarIcon: ({ focused }) => <TabBarIcon icon="🏠" focused={focused} />,
+          tabBarIcon: ({ focused }) => <TabBarIcon name="home" focused={focused} />,
         }}
       />
       <Tab.Screen
@@ -88,7 +95,7 @@ const MainTabNavigator: React.FC = () => {
         component={CallLogsScreen}
         options={{
           title: 'Calls',
-          tabBarIcon: ({ focused }) => <TabBarIcon icon="📞" focused={focused} />,
+          tabBarIcon: ({ focused }) => <TabBarIcon name="phone" focused={focused} />,
         }}
       />
       <Tab.Screen
@@ -96,7 +103,7 @@ const MainTabNavigator: React.FC = () => {
         component={SMSScreen}
         options={{
           title: 'SMS',
-          tabBarIcon: ({ focused }) => <TabBarIcon icon="💬" focused={focused} />,
+          tabBarIcon: ({ focused }) => <TabBarIcon name="message-square" focused={focused} />,
         }}
       />
       <Tab.Screen
@@ -104,7 +111,7 @@ const MainTabNavigator: React.FC = () => {
         component={WiFiMonitorScreen}
         options={{
           title: 'WiFi',
-          tabBarIcon: ({ focused }) => <TabBarIcon icon="📶" focused={focused} />,
+          tabBarIcon: ({ focused }) => <TabBarIcon name="wifi" focused={focused} />,
         }}
       />
       <Tab.Screen
@@ -112,7 +119,7 @@ const MainTabNavigator: React.FC = () => {
         component={MoreStackNavigator}
         options={{
           title: 'More',
-          tabBarIcon: ({ focused }) => <TabBarIcon icon="☰" focused={focused} />,
+          tabBarIcon: ({ focused }) => <TabBarIcon name="menu" focused={focused} />,
         }}
       />
     </Tab.Navigator>
@@ -124,11 +131,10 @@ const MoreScreen: React.FC<{ navigation: any }> = ({ navigation }) => {
   const { logout } = useAuth();
 
   const menuItems = [
-    { label: 'Profile', icon: '👤', screen: 'Profile' },
-    { label: 'Sync History', icon: '📊', screen: 'History' },
-    // { label: 'Company', icon: '🏢', screen: 'Company' },
-    { label: 'Settings', icon: '⚙️', screen: 'Settings' },
-    { label: 'Help & Support', icon: '❓', screen: 'Help' },
+    { label: 'Profile', icon: 'user', screen: 'Profile' },
+    { label: 'Sync History', icon: 'activity', screen: 'History' },
+    { label: 'Settings', icon: 'settings', screen: 'Settings' },
+    { label: 'Help & Support', icon: 'help-circle', screen: 'Help' },
   ];
 
   return (
@@ -143,14 +149,14 @@ const MoreScreen: React.FC<{ navigation: any }> = ({ navigation }) => {
             style={styles.menuItem}
             onPress={() => navigation.navigate(item.screen)}
           >
-            <Text style={styles.menuIcon}>{item.icon}</Text>
+            <Icon name={item.icon} size={22} color={COLORS.primary} style={styles.menuIcon} />
             <Text style={styles.menuLabel}>{item.label}</Text>
-            <Text style={styles.menuArrow}>→</Text>
+            <Icon name="chevron-right" size={20} color={COLORS.textLight} />
           </TouchableOpacity>
         ))}
 
         <TouchableOpacity style={styles.logoutItem} onPress={logout}>
-          <Text style={styles.logoutIcon}>🚪</Text>
+          <Icon name="log-out" size={22} color={COLORS.error} style={styles.menuIcon} />
           <Text style={styles.logoutLabel}>Logout</Text>
         </TouchableOpacity>
       </View>
@@ -272,9 +278,6 @@ const styles = StyleSheet.create({
     fontWeight: 'bold',
     color: COLORS.textWhite,
   },
-  tabIcon: {
-    fontSize: 24,
-  },
   tabIconActive: {
     transform: [{ scale: 1.1 }],
   },
@@ -290,7 +293,6 @@ const styles = StyleSheet.create({
     marginBottom: SPACING.sm,
   },
   menuIcon: {
-    fontSize: 24,
     marginRight: SPACING.lg,
   },
   menuLabel: {
@@ -298,10 +300,6 @@ const styles = StyleSheet.create({
     fontSize: FONT_SIZE.md,
     fontWeight: '500',
     color: COLORS.text,
-  },
-  menuArrow: {
-    fontSize: FONT_SIZE.lg,
-    color: COLORS.textLight,
   },
   logoutItem: {
     flexDirection: 'row',
@@ -312,10 +310,6 @@ const styles = StyleSheet.create({
     marginTop: SPACING.lg,
     borderWidth: 1,
     borderColor: COLORS.error,
-  },
-  logoutIcon: {
-    fontSize: 24,
-    marginRight: SPACING.lg,
   },
   logoutLabel: {
     flex: 1,

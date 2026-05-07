@@ -41,7 +41,6 @@ apiClient.interceptors.request.use(
       const token = await SecureStorageService.getToken();
       if (token && config.headers) {
         config.headers.Authorization = `Bearer ${token}`;
-        console.log(`[API] ${config.method?.toUpperCase()} ${config.url} - Token attached`);
       } else {
         console.log(`[API] ${config.method?.toUpperCase()} ${config.url} - No token available`);
       }

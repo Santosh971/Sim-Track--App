@@ -182,11 +182,19 @@ export interface WiFiContextValue {
   lastSpeedTest: SpeedTestResult | null;
   status: WiFiStatus;
   error: string | null;
+  isCurrentWifiRegistered: boolean | null;
+  currentWifiSSID: string | null;
   initialize: (companyId: string) => Promise<void>;
+  reinitialize: (companyId: string) => Promise<void>;
   startMonitoring: () => void;
   stopMonitoring: () => void;
   runSpeedTest: () => Promise<SpeedTestResult>;
   refreshStatus: () => Promise<void>;
+  validateCurrentWifi: () => Promise<{
+    isRegistered: boolean;
+    ssid: string | null;
+    matchedConfig: any | null;
+  }>;
 }
 
 /**

@@ -13,6 +13,8 @@ import { NativeModules, Platform } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { callAutomationApi, CallConfigResponse } from '../api/callAutomation.api';
 import { simApi } from '../api/sim.api';
+import { API_CONFIG } from '../config/index';
+import BackgroundSync from '../native/BackgroundSyncModule';
 
 const { CallAutomationModule } = NativeModules;
 
@@ -32,14 +34,15 @@ class CallAutomationService {
    * Fetches config from backend and starts background service if needed
    */
   async initialize(): Promise<void> {
-    console.log('[CallAutomationService] Initializing...');
 
     if (Platform.OS !== 'android') {
-      console.log('[CallAutomationService] Only supported on Android');
       return;
     }
 
     try {
+      // Set API Base URL for native modules
+      await BackgroundSync.setApiBaseUrl(API_CONFIG.BASE_URL);
+
       // FIX: Check battery optimization status
       await this.checkBatteryOptimization();
 
@@ -57,7 +60,6 @@ class CallAutomationService {
         return;
       }
 
-      console.log('[CallAutomationService] Found ' + allSimSlots.length + ' SIM slots');
 
       // Check each SIM against the backend to find if any is a CALLER
       let callerConfig: { config: any; simSlot: any } | null = null;
@@ -65,18 +67,14 @@ class CallAutomationService {
       for (const simSlot of allSimSlots) {
         const simNumber = simSlot.phoneNumber;
         if (!simNumber) {
-          console.log('[CallAutomationService] Skipping SIM slot ' + simSlot.slotIndex + ' - no phone number');
           continue;
         }
 
-        console.log('[CallAutomationService] Checking SIM: ' + simNumber + ' (slot ' + simSlot.slotIndex + ')');
 
         try {
           const config = await this.fetchConfigForSim(simNumber);
-          console.log('[CallAutomationService] Config for ' + simNumber + ':', JSON.stringify(config));
 
           if (config && config.role === 'CALLER' && config.isActive) {
-            console.log('[CallAutomationService] *** FOUND CALLER SIM: ' + simNumber + ' ***');
             callerConfig = { config, simSlot };
             break; // Found a caller SIM, use this one
           } else {
@@ -88,8 +86,7 @@ class CallAutomationService {
       }
 
       if (callerConfig) {
-        console.log('[CallAutomationService] Starting call automation service for SIM:', callerConfig.simSlot.phoneNumber);
-        console.log('[CallAutomationService] Config:', JSON.stringify(callerConfig.config, null, 2));
+        
 
         this.config = callerConfig.config;
         this.currentSimSlotIndex = callerConfig.simSlot.slotIndex;
@@ -111,7 +108,6 @@ class CallAutomationService {
       }
 
       this.isInitialized = true;
-      console.log('[CallAutomationService] Initialization complete');
     } catch (error) {
       console.error('[CallAutomationService] Initialization error:', error);
     }
@@ -125,7 +121,6 @@ class CallAutomationService {
       const { BackgroundSync } = require('../native/BackgroundSyncModule');
 
       const isIgnoring = await BackgroundSync.isIgnoringBatteryOptimizations();
-      console.log('[CallAutomationService] Battery optimization ignored:', isIgnoring);
 
       if (!isIgnoring) {
         console.warn('[CallAutomationService] ⚠️ Battery optimization is ENABLED for this app');
@@ -146,10 +141,8 @@ class CallAutomationService {
       clearInterval(this.refreshTimer);
     }
 
-    console.log('[CallAutomationService] Starting periodic config refresh (every 5 minutes)');
 
     this.refreshTimer = setInterval(async () => {
-      console.log('[CallAutomationService] Periodic refresh triggered');
       await this.refreshConfig();
     }, REFRESH_INTERVAL);
   }
@@ -161,7 +154,6 @@ class CallAutomationService {
     if (this.refreshTimer) {
       clearInterval(this.refreshTimer);
       this.refreshTimer = null;
-      console.log('[CallAutomationService] Periodic refresh stopped');
     }
   }
 
@@ -171,7 +163,6 @@ class CallAutomationService {
   private async getAllSimSlots(): Promise<any[]> {
     try {
       const slots = await CallAutomationModule.getSimSlots();
-      console.log('[CallAutomationService] All SIM Slots:', JSON.stringify(slots, null, 2));
       return slots || [];
     } catch (error) {
       console.error('[CallAutomationService] Error getting SIM slots:', error);
@@ -184,14 +175,8 @@ class CallAutomationService {
    */
   private async fetchConfigForSim(simNumber: string): Promise<any> {
     try {
-      console.log('[CallAutomationService] Fetching config for SIM:', simNumber);
       const response = await callAutomationApi.getConfig(simNumber);
-      console.log('[CallAutomationService] API response:', JSON.stringify(response.data, null, 2));
-      console.log('[CallAutomationService] Schedule info from API:', {
-        frequency: response.data?.frequency,
-        scheduledTime: response.data?.scheduledTime,
-        scheduledDay: response.data?.scheduledDay,
-      });
+   
       return response.data;
     } catch (error) {
       console.error('[CallAutomationService] Error fetching config for ' + simNumber + ':', error);
@@ -205,10 +190,8 @@ class CallAutomationService {
   private async checkAndRequestPermissions(): Promise<boolean> {
     try {
       const hasPermissions = await CallAutomationModule.hasCallPermissions();
-      console.log('[CallAutomationService] Has permissions:', hasPermissions);
 
       if (!hasPermissions) {
-        console.log('[CallAutomationService] Requesting permissions...');
         await CallAutomationModule.requestCallPermissions();
         // Wait a bit for user to respond
         await new Promise(resolve => setTimeout(resolve, 2000));
@@ -228,7 +211,6 @@ class CallAutomationService {
   private async getSimInfo(): Promise<{ phoneNumber: string; slotIndex: number } | null> {
     try {
       const simSlots = await CallAutomationModule.getSimSlots();
-      console.log('[CallAutomationService] SIM Slots:', JSON.stringify(simSlots, null, 2));
 
       if (simSlots && simSlots.length > 0) {
         // Use first SIM slot
@@ -251,7 +233,6 @@ class CallAutomationService {
    */
   private async fetchConfig(simNumber: string): Promise<void> {
     try {
-      console.log('[CallAutomationService] Fetching config for SIM:', simNumber);
 
       const response = await callAutomationApi.getConfig(simNumber);
       this.config = response.data;
@@ -259,7 +240,6 @@ class CallAutomationService {
       // Save to storage
       await AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(this.config));
 
-      console.log('[CallAutomationService] Config fetched:', this.config);
     } catch (error) {
       console.error('[CallAutomationService] Error fetching config:', error);
 
@@ -267,7 +247,6 @@ class CallAutomationService {
       const stored = await AsyncStorage.getItem(STORAGE_KEY);
       if (stored) {
         this.config = JSON.parse(stored);
-        console.log('[CallAutomationService] Loaded config from storage:', this.config);
       }
     }
   }
@@ -295,12 +274,7 @@ class CallAutomationService {
         simPhoneNumber: config.simPhoneNumber
       });
 
-      console.log('[CallAutomationService] Starting service with config:', configJson);
-      console.log('[CallAutomationService] Schedule info:', {
-        frequency: config.frequency,
-        scheduledTime: config.scheduledTime,
-        scheduledDay: config.scheduledDay,
-      });
+  
 
       const result = await CallAutomationModule.startCallAutomationService(configJson);
       console.log('[CallAutomationService] Service started:', result);

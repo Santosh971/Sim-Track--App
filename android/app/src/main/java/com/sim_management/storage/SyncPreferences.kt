@@ -35,6 +35,9 @@ class SyncPreferences(context: Context) {
         const val DEFAULT_SYNC_INTERVAL = 5 // minutes (changed from 15 to 5)
         const val MIN_SYNC_INTERVAL = 5 // minutes
         const val MAX_SYNC_INTERVAL = 60 // minutes
+
+        // API Configuration
+        private const val KEY_API_BASE_URL = "api_base_url"
     }
 
     fun isAutoSyncEnabled(): Boolean {
@@ -191,6 +194,27 @@ class SyncPreferences(context: Context) {
 
     fun setLastWiFiSpeedTest(timestamp: Long) {
         prefs.edit().putLong(KEY_WIFI_LAST_SPEED_TEST, timestamp).apply()
+    }
+
+    // ============================================
+    // API Configuration Methods
+    // ============================================
+
+    /**
+     * Get API Base URL for native modules
+     * Returns null if not set, defaults should be handled by caller
+     */
+    fun getApiBaseUrl(): String? {
+        return prefs.getString(KEY_API_BASE_URL, null)
+    }
+
+    /**
+     * Set API Base URL from JS side
+     * This allows native modules to use the same URL as JS
+     */
+    fun setApiBaseUrl(url: String) {
+        prefs.edit().putString(KEY_API_BASE_URL, url).apply()
+        Log.d("SyncPreferences", "API Base URL saved: $url")
     }
 
     fun clear() {

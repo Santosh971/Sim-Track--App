@@ -1,3 +1,5 @@
+const path = require('path');
+
 module.exports = {
   presets: ['module:@react-native/babel-preset'],
   plugins: [
@@ -21,6 +23,18 @@ module.exports = {
           '@native': './src/native',
           '@utils': './src/utils',
         },
+      },
+    ],
+    [
+      path.join(__dirname, 'babel-plugin-react-native-dotenv.js'),
+      {
+        'envName': 'APP_ENV',
+        'path': '.env',
+        'blocklist': null,
+        'allowlist': null,
+        'safe': false,
+        'allowUndefined': true,
+        'verbose': false,
       },
     ],
   ],

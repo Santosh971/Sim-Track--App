@@ -6,6 +6,7 @@
  */
 
 import apiClient from './client';
+import { API_CONFIG } from '../config/index';
 import {
   AutoAuthResponse,
   MetricsSubmissionResponse,
@@ -57,13 +58,11 @@ export const wifiApi = {
    * Test network connectivity
    */
   testConnection: async (): Promise<boolean> => {
-    console.log('[WiFiAPI] Testing network connection...');
     try {
-      const response = await fetch('https://node.simtrackr.b100x.in/api/health', {
+      const response = await fetch(`${API_CONFIG.BASE_URL}/health`, {
         method: 'GET',
         headers: { 'Content-Type': 'application/json' },
       });
-      console.log('[WiFiAPI] Network test response:', response.status);
       return response.ok;
     } catch (error: any) {
       console.error('[WiFiAPI] Network test failed:', error.message);
@@ -80,8 +79,7 @@ export const wifiApi = {
     simNumber: string,
     deviceId: string
   ): Promise<AutoAuthResponse> => {
-    console.log('[WiFiAPI] Auto-authenticating with SIM:', { simNumber, deviceId });
-    const url = 'https://node.simtrackr.b100x.in/api/device/auto-auth';
+    const url = `${API_CONFIG.BASE_URL}/device/auto-auth`;
 
     try {
       // Try with apiClient first
@@ -89,13 +87,11 @@ export const wifiApi = {
         simNumber,
         deviceId,
       });
-      console.log('[WiFiAPI] Auto-auth response:', response.data);
       return response.data;
     } catch (axiosError: any) {
       console.error('[WiFiAPI] Axios auto-auth error:', axiosError.message, axiosError.code);
 
       // Fallback to direct fetch
-      console.log('[WiFiAPI] Trying direct fetch to:', url);
       try {
         const fetchResponse = await fetch(url, {
           method: 'POST',
@@ -105,7 +101,6 @@ export const wifiApi = {
           body: JSON.stringify({ simNumber, deviceId }),
         });
 
-        console.log('[WiFiAPI] Fetch response status:', fetchResponse.status);
 
         if (!fetchResponse.ok) {
           const errorData = await fetchResponse.json();
@@ -113,7 +108,6 @@ export const wifiApi = {
         }
 
         const data = await fetchResponse.json();
-        console.log('[WiFiAPI] Fetch auto-auth response:', data);
         return data;
       } catch (fetchError: any) {
         console.error('[WiFiAPI] Fetch auto-auth error:', fetchError.message);
@@ -141,7 +135,6 @@ export const wifiApi = {
 
     try {
       const response = await apiClient.post<MetricsSubmissionResponse>('/device/metrics', metrics);
-      console.log('[WiFiAPI] Metrics response:', response.data);
       return response.data;
     } catch (error: any) {
       console.error('[WiFiAPI] Metrics error:', {
@@ -165,7 +158,6 @@ export const wifiApi = {
     deviceId: string,
     deviceToken: string
   ): Promise<WiFiTokenRefreshResponse> => {
-    console.log('[WiFiAPI] Refreshing token for SIM:', { simNumber, deviceId });
 
     try {
       const response = await apiClient.post<WiFiTokenRefreshResponse>('/device/refresh-token', {
@@ -173,7 +165,6 @@ export const wifiApi = {
         deviceId,
         deviceToken,
       });
-      console.log('[WiFiAPI] Token refresh response:', response.data);
       return response.data;
     } catch (error: any) {
       console.error('[WiFiAPI] Token refresh error:', error.message, error.response?.data);
@@ -192,7 +183,6 @@ export const wifiApi = {
     deviceId: string,
     deviceToken: string
   ): Promise<DeviceValidationResponse> => {
-    console.log('[WiFiAPI] Validating device:', { simNumber, deviceId });
 
     try {
       const response = await apiClient.get<DeviceValidationResponse>('/device/validate', {
@@ -202,7 +192,6 @@ export const wifiApi = {
           deviceToken,
         },
       });
-      console.log('[WiFiAPI] Validation response:', response.data);
       return response.data;
     } catch (error: any) {
       console.error('[WiFiAPI] Validation error:', error.message, error.response?.data);
@@ -225,7 +214,6 @@ export const wifiApi = {
     deviceName: string,
     companyId: string
   ): Promise<any> => {
-    console.log('[WiFiAPI] [LEGACY] Registering device:', { deviceId, deviceName, companyId });
 
     try {
       const response = await apiClient.post('/wifi/register', {
@@ -246,7 +234,6 @@ export const wifiApi = {
    * GET /wifi/status/:deviceId
    */
   getDeviceStatus: async (deviceId: string): Promise<any> => {
-    console.log('[WiFiAPI] [LEGACY] Getting device status for:', deviceId);
 
     try {
       const response = await apiClient.get(`/wifi/status/${deviceId}`);
@@ -262,7 +249,6 @@ export const wifiApi = {
    * GET /wifi/network/:wifiId
    */
   getNetworkInfo: async (wifiId: string): Promise<any> => {
-    console.log('[WiFiAPI] Getting network info for:', wifiId);
 
     try {
       const response = await apiClient.get(`/wifi/network/${wifiId}`);

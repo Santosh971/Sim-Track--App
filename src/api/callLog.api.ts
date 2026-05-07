@@ -51,7 +51,6 @@ export const callLogApi = {
     simId: string,
     callLogs: APICallLog[]
   ): Promise<SyncResponse> => {
-    console.log('[CallLogAPI] sync called:', { simId, callLogsCount: callLogs.length });
 
     try {
       const response = await apiClient.post<RawSyncResponse>('/call-logs/sync', {
@@ -59,7 +58,6 @@ export const callLogApi = {
         callLogs,
       });
 
-      console.log('[CallLogAPI] sync response:', response.data);
       return normalizeSyncResponse(response.data);
     } catch (error: any) {
       console.error('[CallLogAPI] sync error:', error.message, error.response?.data);

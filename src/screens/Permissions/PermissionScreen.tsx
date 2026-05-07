@@ -83,14 +83,12 @@ const PermissionScreen: React.FC<Props> = ({ navigation }) => {
   }, []);
 
   const checkExistingPermissions = async () => {
-    console.log('[PermissionScreen] Checking existing permissions...');
-    console.log('[PermissionScreen] Platform:', Platform.OS);
+    
 
     if (Platform.OS !== 'android') {
       // On iOS, permissions are not required for call log access
       // (call log access is not available on iOS)
       // Navigate directly to Dashboard
-      console.log('[PermissionScreen] iOS detected, skipping permissions');
       navigation.replace('Main');
       return;
     }
@@ -132,10 +130,8 @@ const PermissionScreen: React.FC<Props> = ({ navigation }) => {
       // Location is optional but recommended for WiFi monitoring
       const allPermissionsGranted = status.readCallLog && status.readPhoneState && status.readSms;
       console.log('[PermissionScreen] All permissions granted:', allPermissionsGranted);
-      console.log('[PermissionScreen] Location permission:', hasLocationPermission);
 
       if (allPermissionsGranted) {
-        console.log('[PermissionScreen] All permissions granted, navigating to Dashboard');
         await StorageService.setPermissionsGranted(true);
         navigation.replace('Main');
         return;
@@ -145,17 +141,10 @@ const PermissionScreen: React.FC<Props> = ({ navigation }) => {
       const hasPermissions = await StorageService.hasPermissions();
       if (hasPermissions) {
         // Permissions were granted before but now revoked - clear the flag
-        console.log('[PermissionScreen] Permissions were revoked, clearing flag');
         await StorageService.setPermissionsGranted(false);
       }
 
-      console.log('[PermissionScreen] Waiting for user to grant permissions');
-      console.log('[PermissionScreen] Missing permissions:', {
-        readCallLog: !status.readCallLog,
-        readPhoneState: !status.readPhoneState,
-        readSms: !status.readSms,
-        location: !hasLocationPermission,
-      });
+
     } catch (error) {
       console.error('[PermissionScreen] Error checking permissions:', error);
     } finally {
@@ -172,7 +161,6 @@ const PermissionScreen: React.FC<Props> = ({ navigation }) => {
     setIsRequesting(true);
 
     try {
-      console.log('[PermissionScreen] Requesting permissions using PermissionsAndroid...');
 
       // Request essential permissions using PermissionsAndroid (properly waits for user response)
       const essentialPermissions = [
@@ -245,7 +233,6 @@ const PermissionScreen: React.FC<Props> = ({ navigation }) => {
       const hasEssentialPermissions = hasReadCallLog && hasReadPhoneState && hasReadSms;
 
       if (hasEssentialPermissions) {
-        console.log('[PermissionScreen] All essential permissions granted');
         await StorageService.setPermissionsGranted(true);
 
         // Navigate first, then detect SIMs and start sync in background
@@ -253,7 +240,6 @@ const PermissionScreen: React.FC<Props> = ({ navigation }) => {
 
         // Re-detect SIMs in background after navigation
         // This prevents UI blocking during SIM detection
-        console.log('[PermissionScreen] Starting background SIM detection and auto sync...');
         const { SIMManager } = require('../../services/SIMManager');
         const { SyncService } = require('../../services/SyncService');
         const { SMSService } = require('../../services/SMSService');
@@ -284,7 +270,6 @@ const PermissionScreen: React.FC<Props> = ({ navigation }) => {
               const isRunning = await BackgroundSync.isRunning();
               if (!isRunning) {
                 await BackgroundSync.startSync();
-                console.log('[PermissionScreen] Background sync service started');
               }
             } catch (bgErr) {
               console.error('[PermissionScreen] Failed to start background sync:', bgErr);

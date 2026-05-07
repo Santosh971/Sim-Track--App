@@ -78,7 +78,6 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
 
         // Initialize SIM detection in background (non-blocking)
         // This prevents UI freeze after login
-        console.log('[AuthContext] Starting background SIM initialization...');
         AuthService.initializeSIMs()
           .then(() => {
             console.log('[AuthContext] SIM detection complete');

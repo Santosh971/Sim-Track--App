@@ -8,7 +8,7 @@
 import { Platform, NativeModules } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { wifiApi } from '../api/index';
-import { STORAGE_KEYS, WIFI_CONFIG } from '../config/index';
+import { STORAGE_KEYS, WIFI_CONFIG, API_CONFIG } from '../config/index';
 import SIMDetection from '../native/SIMModule';
 import BackgroundSync from '../native/BackgroundSyncModule';
 import {
@@ -246,7 +246,7 @@ export const WiFiService = {
         console.log('[WiFiService] Calling wifiApi.autoAuth with:', {
           simNumber: sim.phoneNumber,
           deviceId: deviceId,
-          baseUrl: 'https://node.simtrackr.b100x.in/api'
+          baseUrl: API_CONFIG.BASE_URL
         });
 
         const response = await wifiApi.autoAuth(sim.phoneNumber, deviceId);
@@ -879,6 +879,7 @@ export const WiFiService = {
    * Perform a speed test (JavaScript implementation as fallback)
    * This measures download speed by timing a network request
    * FIXED: Now properly handles case when not on WiFi
+   * FIXED: Removed fake simulation - now shows real speeds or proper error messages
    */
   async performSpeedTest(): Promise<SpeedTestResult> {
     console.log('[WiFiService] Starting speed test...');
@@ -890,9 +891,13 @@ export const WiFiService = {
 
       if (!wifiStatus.isOnWifi) {
         console.warn('[WiFiService] ⚠️ NOT ON WIFI - Speed test cannot be performed');
-        console.warn('[WiFiService] Please connect to WiFi to measure speed');
-        // Return a result with a special flag to indicate not on WiFi
         throw new Error('Not connected to WiFi. Please connect to a WiFi network to run speed test.');
+      }
+
+      // Check if internet is reachable
+      if (!wifiStatus.canReachInternet) {
+        console.warn('[WiFiService] ⚠️ NO INTERNET - WiFi connected but no internet access');
+        throw new Error('WiFi connected but no internet access. Please check your router or try again.');
       }
 
       // Try to use native module first (if available)
@@ -907,7 +912,7 @@ export const WiFiService = {
             // If result is all zeros, it means speed test failed
             if (result.download === 0 && result.upload === 0 && result.latency === 0) {
               console.warn('[WiFiService] Speed test returned zeros - speed test failed');
-              throw new Error('Speed test failed. Please check your WiFi connection.');
+              throw new Error('Speed test returned invalid results. Your internet connection may be unstable.');
             }
 
             const speedResult: SpeedTestResult = {
@@ -924,7 +929,9 @@ export const WiFiService = {
           }
         } catch (nativeError: any) {
           // If it's our custom error, re-throw it
-          if (nativeError.message?.includes('WiFi') || nativeError.message?.includes('Speed test failed')) {
+          if (nativeError.message?.includes('WiFi') ||
+              nativeError.message?.includes('internet') ||
+              nativeError.message?.includes('Speed test')) {
             throw nativeError;
           }
           console.warn('[WiFiService] Native speed test failed, using JS fallback:', nativeError);
@@ -946,64 +953,78 @@ export const WiFiService = {
 
   /**
    * JavaScript-based speed test (fallback)
+   * Measures actual download speed from reliable CDN servers
+   * Throws error if speed test cannot be performed
    */
   async performJSSpeedTest(): Promise<SpeedTestResult> {
-    const startTime = Date.now();
+    console.log('[WiFiService] Running JavaScript speed test...');
 
-    try {
-      // Test download speed by fetching a test file
-      const testUrl = `${WIFI_CONFIG.SPEED_TEST_SERVER}/download.php`;
+    // Reliable CDN endpoints for speed testing
+    const testUrls = [
+      'https://speed.cloudflare.com/__down?bytes=5000000', // 5MB from Cloudflare
+      'https://speed.cloudflare.com/__down?bytes=1000000', // 1MB from Cloudflare
+    ];
 
-      const downloadStart = Date.now();
-      const response = await fetch(testUrl, {
-        method: 'GET',
-        cache: 'no-cache',
-      });
+    for (const testUrl of testUrls) {
+      try {
+        console.log(`[WiFiService] Trying test URL: ${testUrl}`);
 
-      if (!response.ok) {
-        throw new Error(`Speed test server returned ${response.status}`);
+        const downloadStart = Date.now();
+        const response = await fetch(testUrl, {
+          method: 'GET',
+          cache: 'no-cache',
+        });
+
+        if (!response.ok) {
+          console.warn(`[WiFiService] Server returned ${response.status} for ${testUrl}`);
+          continue; // Try next URL
+        }
+
+        const data = await response.blob();
+        const downloadEnd = Date.now();
+        const downloadTime = downloadEnd - downloadStart;
+
+        // Calculate download speed in Mbps
+        const downloadBits = data.size * 8;
+        const downloadSeconds = downloadTime / 1000;
+        const downloadSpeed = downloadBits / downloadSeconds / 1000000;
+
+        console.log(`[WiFiService] Download test result:`, {
+          url: testUrl,
+          bytesDownloaded: data.size,
+          timeMs: downloadTime,
+          speedMbps: downloadSpeed.toFixed(2),
+        });
+
+        // Validate result - need at least 100KB for accurate measurement
+        if (data.size >= 100000 && downloadSpeed > 0) {
+          // Test latency with a small request
+          const latencyStart = Date.now();
+          try {
+            await fetch('https://www.google.com', { method: 'HEAD', cache: 'no-cache' });
+          } catch (e) {
+            // Ignore latency test failure
+          }
+          const latencyEnd = Date.now();
+          const latency = latencyEnd - latencyStart;
+
+          return {
+            download: Math.round(downloadSpeed * 100) / 100,
+            upload: 0, // Upload test requires server support
+            latency,
+            timestamp: Date.now(),
+          };
+        } else {
+          console.warn(`[WiFiService] Download too small (${data.size} bytes) for accurate measurement`);
+        }
+      } catch (error: any) {
+        console.warn(`[WiFiService] Test failed for ${testUrl}:`, error.message);
+        // Continue to next URL
       }
-
-      const data = await response.blob();
-      const downloadEnd = Date.now();
-      const downloadTime = downloadEnd - downloadStart;
-
-      // Calculate download speed in Mbps
-      const downloadBits = data.size * 8;
-      const downloadSeconds = downloadTime / 1000;
-      const downloadSpeed = downloadBits / downloadSeconds / 1000000;
-
-      // Test latency with a small request
-      const latencyStart = Date.now();
-      await fetch(`${WIFI_CONFIG.SPEED_TEST_SERVER}/ping.php`, {
-        method: 'GET',
-        cache: 'no-cache',
-      });
-      const latencyEnd = Date.now();
-      const latency = latencyEnd - latencyStart;
-
-      console.log('[WiFiService] JS speed test complete:', {
-        download: downloadSpeed.toFixed(2),
-        latency,
-      });
-
-      return {
-        download: Math.round(downloadSpeed * 100) / 100,
-        upload: 0, // Upload test requires server support
-        latency,
-        timestamp: Date.now(),
-      };
-    } catch (error: any) {
-      console.warn('[WiFiService] JS speed test error:', error);
-
-      // Return a simulated result if test fails
-      return {
-        download: Math.random() * 50 + 10, // Simulated 10-60 Mbps
-        upload: Math.random() * 20 + 5,     // Simulated 5-25 Mbps
-        latency: Math.random() * 50 + 10,   // Simulated 10-60ms
-        timestamp: Date.now(),
-      };
     }
+
+    // All tests failed
+    throw new Error('Speed test failed. Please check your WiFi connection and internet access.');
   },
 
   // ============================================
@@ -1197,6 +1218,10 @@ export const WiFiService = {
     console.log('[WiFiService] Starting background monitoring (native)');
 
     try {
+      // Set API Base URL in native SharedPreferences for workers
+      await BackgroundSync.setApiBaseUrl(API_CONFIG.BASE_URL);
+      console.log('[WiFiService] API URL set for native workers:', API_CONFIG.BASE_URL);
+
       // Get current config for the worker
       const simNumber = await AsyncStorage.getItem(WIFI_SELECTED_SIM_KEY) || '';
       const deviceId = await AsyncStorage.getItem(WIFI_DEVICE_ID_KEY) || '';

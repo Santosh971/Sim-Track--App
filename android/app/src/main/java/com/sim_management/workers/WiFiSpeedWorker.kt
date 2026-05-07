@@ -32,8 +32,12 @@ class WiFiSpeedWorker(
         private const val KEY_DEVICE_TOKEN = "deviceToken"
         private const val KEY_WIFI_CONFIG = "wifiConfig"
 
-        // API endpoint
-        private const val API_BASE_URL = "https://node.simtrackr.b100x.in/api"
+        // SharedPreferences for API URL
+        private const val PREFS_NAME = "sim_sync_prefs"
+        private const val KEY_API_BASE_URL = "api_base_url"
+
+        // Default fallback URL (used if not set from JS)
+        private const val DEFAULT_API_BASE_URL = "https://node.simtrackr.b100x.in/api"
 
         /**
          * Schedule periodic WiFi speed test
@@ -327,6 +331,15 @@ class WiFiSpeedWorker(
     }
 
     /**
+     * Get API Base URL from SharedPreferences
+     * Falls back to default if not set
+     */
+    private fun getApiBaseUrl(): String {
+        val prefs = applicationContext.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+        return prefs.getString(KEY_API_BASE_URL, DEFAULT_API_BASE_URL) ?: DEFAULT_API_BASE_URL
+    }
+
+    /**
      * Submit speed test result to backend
      */
     private suspend fun submitSpeedTest(
@@ -340,9 +353,12 @@ class WiFiSpeedWorker(
         latency: Double
     ): Boolean = withContext(Dispatchers.IO) {
         try {
-            val url = URL("$API_BASE_URL/device/metrics")
-            val connection = url.openConnection() as H
-            ttpURLConnection
+            // Get API URL from SharedPreferences (set from JS)
+            val apiUrl = getApiBaseUrl()
+            Log.d(TAG, "Using API URL: $apiUrl")
+
+            val url = URL("$apiUrl/device/metrics")
+            val connection = url.openConnection() as HttpURLConnection
 
             connection.requestMethod = "POST"
             connection.setRequestProperty("Content-Type", "application/json")

@@ -37,9 +37,12 @@ class SyncForegroundService : Service() {
         const val ACTION_STOP_SYNC = "com.sim_management.STOP_SYNC"
         const val EXTRA_SYNC_INTERVAL = "sync_interval"
 
-        // API endpoint for WiFi metrics
-        private const val API_BASE_URL = "https://node.simtrackr.b100x.in/api"
-        private const val METRICS_ENDPOINT = "$API_BASE_URL/device/metrics"
+        // SharedPreferences for API URL
+        private const val PREFS_NAME = "sim_sync_prefs"
+        private const val KEY_API_BASE_URL = "api_base_url"
+
+        // Default fallback URL
+        private const val DEFAULT_API_BASE_URL = "https://node.simtrackr.b100x.in/api"
 
         private var isRunning = false
         private var syncIntervalMinutes: Int = 5 // Default 5 minutes
@@ -49,6 +52,14 @@ class SyncForegroundService : Service() {
         private const val WAKE_LOCK_TAG = "SyncForegroundService:WakeLock"
 
         fun isServiceRunning(): Boolean = isRunning
+
+        /**
+         * Get API Base URL from SharedPreferences
+         */
+        fun getApiBaseUrl(context: Context): String {
+            val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+            return prefs.getString(KEY_API_BASE_URL, DEFAULT_API_BASE_URL) ?: DEFAULT_API_BASE_URL
+        }
 
         fun startService(context: Context, syncIntervalMinutes: Int = 5) {
             val intent = Intent(context, SyncForegroundService::class.java).apply {

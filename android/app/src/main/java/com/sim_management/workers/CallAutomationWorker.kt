@@ -47,10 +47,11 @@ class CallAutomationWorker(
     companion object {
         private const val TAG = "CallAutomationWorker"
         private const val WORK_NAME = "call_automation_work"
-        private const val PREFS_NAME = "call_automation"
+        // Use same SharedPreferences as other modules for API URL
+        private const val PREFS_NAME = "sim_sync_prefs"
         private const val KEY_API_BASE_URL = "api_base_url"
 
-        // API endpoint for call completion
+        // API endpoint for call completion (fallback)
         private const val DEFAULT_API_BASE_URL = "https://node.simtrackr.b100x.in/api"
 
         // Interval constants (in minutes)

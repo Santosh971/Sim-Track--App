@@ -103,7 +103,6 @@ const WiFiSpeedModule: WiFiSpeedModuleInterface = {
       }
 
       const result = await WiFiSpeedModule.runSpeedTest();
-      console.log('[WiFiSpeedModule] Speed test result:', result);
       return {
         download: result.download || 0,
         upload: result.upload || 0,
@@ -116,7 +115,6 @@ const WiFiSpeedModule: WiFiSpeedModuleInterface = {
   },
 
   forceRunSpeedTest: async (): Promise<NativeSpeedTestResult> => {
-    console.log('[WiFiSpeedModule] Force running speed test...');
 
     if (Platform.OS !== 'android') {
       return {
@@ -136,7 +134,6 @@ const WiFiSpeedModule: WiFiSpeedModuleInterface = {
       // Call force method if available
       if (WiFiSpeedModule.forceRunSpeedTest) {
         const result = await WiFiSpeedModule.forceRunSpeedTest();
-        console.log('[WiFiSpeedModule] Force speed test result:', result);
         return {
           download: result.download || 0,
           upload: result.upload || 0,
@@ -144,7 +141,6 @@ const WiFiSpeedModule: WiFiSpeedModuleInterface = {
         };
       } else {
         // Fallback to regular method
-        console.log('[WiFiSpeedModule] forceRunSpeedTest not available, using regular method');
         const result = await WiFiSpeedModule.runSpeedTest();
         return {
           download: result.download || 0,
@@ -173,7 +169,6 @@ const WiFiSpeedModule: WiFiSpeedModuleInterface = {
       }
 
       await WiFiSpeedModule.startBackgroundMonitoring(intervalMinutes);
-      console.log('[WiFiSpeedModule] Background monitoring started');
     } catch (error) {
       console.error('[WiFiSpeedModule] Error starting background monitoring:', error);
     }
@@ -192,7 +187,7 @@ const WiFiSpeedModule: WiFiSpeedModuleInterface = {
       }
 
       await WiFiSpeedModule.stopBackgroundMonitoring();
-      console.log('[WiFiSpeedModule] Background monitoring stopped');
+
     } catch (error) {
       console.error('[WiFiSpeedModule] Error stopping background monitoring:', error);
     }

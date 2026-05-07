@@ -31,7 +31,6 @@ export const smsApi = {
     simNumber: string,
     messages: SMSMessage[]
   ): Promise<SMSSyncResponse> => {
-    console.log('[SMSAPI] Sync called:', { simNumber, count: messages.length });
 
     try {
       const response = await apiClient.post<SMSSyncResponse>('/sms/sync', {
@@ -41,7 +40,6 @@ export const smsApi = {
         timeout: 60000, // 1 minute timeout
       });
 
-      console.log('[SMSAPI] Response:', response.status, JSON.stringify(response.data));
       return response.data;
     } catch (error: any) {
       console.error('[SMSAPI] Error:', error.message);

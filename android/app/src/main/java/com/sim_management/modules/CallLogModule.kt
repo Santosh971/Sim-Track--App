@@ -163,6 +163,12 @@ class CallLogModule(reactContext: ReactApplicationContext) : ReactContextBaseJav
             var count = 0
             val maxLogs = 500 // Safety limit
 
+            // Track call type counts for debugging
+            var incomingCount = 0
+            var outgoingCount = 0
+            var missedCount = 0
+            var unknownCount = 0
+
             if (cursor != null) {
                 try {
                     val idIndex = cursor.getColumnIndex(CallLog.Calls._ID)
@@ -177,10 +183,15 @@ class CallLogModule(reactContext: ReactApplicationContext) : ReactContextBaseJav
                         count++
                         val type = cursor.getInt(typeIndex)
                         val callType = when (type) {
-                            CallLog.Calls.INCOMING_TYPE -> "incoming"
-                            CallLog.Calls.OUTGOING_TYPE -> "outgoing"
-                            CallLog.Calls.MISSED_TYPE -> "missed"
-                            else -> "unknown"
+                            CallLog.Calls.INCOMING_TYPE -> { incomingCount++; "incoming" }
+                            CallLog.Calls.OUTGOING_TYPE -> { outgoingCount++; "outgoing" }
+                            CallLog.Calls.MISSED_TYPE -> { missedCount++; "missed" }
+                            else -> { unknownCount++; "unknown" }
+                        }
+
+                        // Log every 50th call for debugging
+                        if (count % 50 == 0 || count <= 5) {
+                            Log.d(TAG, "Call #$count: type=$type, callType=$callType, number=${cursor.getString(numberIndex)}")
                         }
 
                         val callId = if (idIndex >= 0) cursor.getString(idIndex) else ""
@@ -213,7 +224,7 @@ class CallLogModule(reactContext: ReactApplicationContext) : ReactContextBaseJav
                 }
             }
 
-            Log.d(TAG, "Returning ${count} call logs")
+            Log.d(TAG, "Returning ${count} call logs - Types: incoming=$incomingCount, outgoing=$outgoingCount, missed=$missedCount, unknown=$unknownCount")
             promise.resolve(callLogs)
         } catch (e: Exception) {
             Log.e(TAG, "Failed to read call logs", e)

@@ -1,5 +1,6 @@
 /**
  * SMS Screen - View synced SMS messages
+ * With infinite scroll for better performance
  */
 
 import React, { useState, useEffect, useCallback } from 'react';
@@ -7,7 +8,7 @@ import {
   View,
   Text,
   StyleSheet,
-  ScrollView,
+  FlatList,
   ActivityIndicator,
   RefreshControl,
   TouchableOpacity,
@@ -27,13 +28,25 @@ interface SMSCounts {
   sent: number;
 }
 
+const BATCH_SIZE = 20; // Number of items to load per batch
+
 const SMSScreen: React.FC = () => {
-  const [messages, setMessages] = useState<DeviceSMS[]>([]);
-  const [filteredMessages, setFilteredMessages] = useState<DeviceSMS[]>([]);
+  const [allMessages, setAllMessages] = useState<DeviceSMS[]>([]);
+  const [displayedMessages, setDisplayedMessages] = useState<DeviceSMS[]>([]);
   const [counts, setCounts] = useState<SMSCounts>({ total: 0, inbox: 0, sent: 0 });
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
+  const [loadingMore, setLoadingMore] = useState(false);
   const [activeFilter, setActiveFilter] = useState<SMSType>('all');
+  const [hasMore, setHasMore] = useState(true);
+  const [currentPage, setCurrentPage] = useState(0);
+
+  // Calculated counts from loaded messages (what's actually displayed)
+  const calculatedCounts: SMSCounts = {
+    total: allMessages.length,
+    inbox: allMessages.filter(msg => msg.type === 'inbox').length,
+    sent: allMessages.filter(msg => msg.type === 'sent').length,
+  };
 
   // Refresh data when screen gains focus
   useFocusEffect(
@@ -44,39 +57,77 @@ const SMSScreen: React.FC = () => {
   );
 
   useEffect(() => {
-    filterMessages();
-  }, [activeFilter, messages]);
+    filterAndPaginateMessages(activeFilter, 0, true);
+  }, [activeFilter, allMessages]);
 
   const loadCounts = async () => {
     try {
       const smsCounts = await SMSService.getSMSCounts();
+      console.log('[SMSScreen] SMS counts from device:', smsCounts);
       setCounts(smsCounts);
     } catch (error) {
       console.error('[SMSScreen] Error loading SMS counts:', error);
+      setCounts({ total: 0, inbox: 0, sent: 0 });
     }
   };
 
   const loadMessages = async () => {
     try {
+      console.log('[SMSScreen] Loading SMS messages...');
       const smsMessages = await SMSService.getSMSMessages();
-      setMessages(smsMessages);
+      console.log('[SMSScreen] Loaded SMS messages:', smsMessages?.length || 0);
+      setAllMessages(smsMessages || []);
     } catch (error) {
       console.error('[SMSScreen] Error loading messages:', error);
+      setAllMessages([]);
     } finally {
       setLoading(false);
     }
   };
 
-  const filterMessages = () => {
-    if (activeFilter === 'all') {
-      setFilteredMessages(messages);
-    } else {
-      setFilteredMessages(messages.filter(msg => msg.type === activeFilter));
-    }
+  // Filter messages and paginate
+  const filterAndPaginateMessages = (filter: SMSType, page: number, reset: boolean = false) => {
+    const filtered = filter === 'all'
+      ? allMessages
+      : allMessages.filter(msg => msg.type === filter);
+
+    const startIndex = 0;
+    const endIndex = (page + 1) * BATCH_SIZE;
+    const batch = filtered.slice(startIndex, endIndex);
+
+    setDisplayedMessages(batch);
+    setHasMore(endIndex < filtered.length);
+    setCurrentPage(page);
+  };
+
+  // Load more messages when scrolling
+  const loadMoreMessages = () => {
+    if (loadingMore || !hasMore) return;
+
+    setLoadingMore(true);
+
+    // Simulate async loading for smooth UI
+    setTimeout(() => {
+      const nextPage = currentPage + 1;
+      const filtered = activeFilter === 'all'
+        ? allMessages
+        : allMessages.filter(msg => msg.type === activeFilter);
+
+      const startIndex = 0;
+      const endIndex = (nextPage + 1) * BATCH_SIZE;
+      const batch = filtered.slice(startIndex, endIndex);
+
+      setDisplayedMessages(batch);
+      setHasMore(endIndex < filtered.length);
+      setCurrentPage(nextPage);
+      setLoadingMore(false);
+    }, 100);
   };
 
   const onRefresh = async () => {
     setRefreshing(true);
+    setCurrentPage(0);
+    setHasMore(true);
     await Promise.all([loadCounts(), loadMessages()]);
     setRefreshing(false);
   };
@@ -99,6 +150,58 @@ const SMSScreen: React.FC = () => {
 
   const filters: SMSType[] = ['all', 'inbox', 'sent'];
 
+  const renderMessageItem = ({ item, index }: { item: DeviceSMS; index: number }) => (
+    <View key={item._id || index} style={styles.messageItem}>
+      <View style={[
+        styles.messageTypeIndicator,
+        { backgroundColor: item.type === 'sent' ? COLORS.primary : COLORS.success }
+      ]} />
+      <View style={styles.messageContent}>
+        <View style={styles.messageHeader}>
+          <Text style={styles.messageAddress}>
+            {item.sender}
+          </Text>
+          <Text style={styles.messageTime}>
+            {formatTimestamp(item.timestamp)}
+          </Text>
+        </View>
+        <Text style={styles.messageBody}>
+          {truncateText(item.message, 80)}
+        </Text>
+        <View style={styles.messageFooter}>
+          <Text style={[
+            styles.messageType,
+            { color: item.type === 'sent' ? COLORS.primary : COLORS.success }
+          ]}>
+            {item.type}
+          </Text>
+        </View>
+      </View>
+    </View>
+  );
+
+  const renderFooter = () => {
+    if (!loadingMore) return null;
+    return (
+      <View style={styles.footer}>
+        <ActivityIndicator size="small" color={COLORS.primary} />
+        <Text style={styles.footerText}>Loading more messages...</Text>
+      </View>
+    );
+  };
+
+  const renderEmpty = () => (
+    <View style={styles.emptyContainer}>
+      <Text style={styles.emptyIcon}>💬</Text>
+      <Text style={styles.emptyText}>No messages found</Text>
+      <Text style={styles.emptySubtext}>
+        {activeFilter !== 'all'
+          ? `No ${activeFilter} messages to display`
+          : 'SMS messages will appear here after sync'}
+      </Text>
+    </View>
+  );
+
   if (loading) {
     return (
       <SafeAreaView style={styles.container}>
@@ -120,7 +223,11 @@ const SMSScreen: React.FC = () => {
               styles.filterTab,
               activeFilter === filter && styles.filterTabActive,
             ]}
-            onPress={() => setActiveFilter(filter)}
+            onPress={() => {
+              setActiveFilter(filter);
+              setCurrentPage(0);
+              setHasMore(true);
+            }}
           >
             <Text
               style={[
@@ -134,76 +241,41 @@ const SMSScreen: React.FC = () => {
         ))}
       </View>
 
-      {/* Messages List */}
-      <ScrollView
-        contentContainerStyle={styles.scrollContent}
+      {/* Stats Summary */}
+      {/* <View style={styles.statsContainer}>
+        <View style={styles.statItem}>
+          <Text style={styles.statNumber}>{calculatedCounts.total}</Text>
+          <Text style={styles.statLabel}>Total SMS</Text>
+        </View>
+        <View style={styles.statItem}>
+          <Text style={[styles.statNumber, { color: COLORS.success }]}>
+            {calculatedCounts.inbox}
+          </Text>
+          <Text style={styles.statLabel}>Inbox</Text>
+        </View>
+        <View style={styles.statItem}>
+          <Text style={[styles.statNumber, { color: COLORS.primary }]}>
+            {calculatedCounts.sent}
+          </Text>
+          <Text style={styles.statLabel}>Sent</Text>
+        </View>
+      </View> */}
+
+      {/* Messages List with Infinite Scroll */}
+      <FlatList
+        data={displayedMessages}
+        renderItem={renderMessageItem}
+        keyExtractor={(item, index) => item._id || `sms-${index}`}
+        contentContainerStyle={styles.listContent}
         refreshControl={
           <RefreshControl refreshing={refreshing} onRefresh={onRefresh} />
         }
-      >
-        {/* Stats Summary */}
-        <View style={styles.statsContainer}>
-          <View style={styles.statItem}>
-            <Text style={styles.statNumber}>{counts.total}</Text>
-            <Text style={styles.statLabel}>Total SMS</Text>
-          </View>
-          <View style={styles.statItem}>
-            <Text style={[styles.statNumber, { color: COLORS.success }]}>
-              {counts.inbox}
-            </Text>
-            <Text style={styles.statLabel}>Inbox</Text>
-          </View>
-          <View style={styles.statItem}>
-            <Text style={[styles.statNumber, { color: COLORS.primary }]}>
-              {counts.sent}
-            </Text>
-            <Text style={styles.statLabel}>Sent</Text>
-          </View>
-        </View>
-
-        {/* Messages List */}
-        {filteredMessages.length === 0 ? (
-          <View style={styles.emptyContainer}>
-            <Text style={styles.emptyIcon}>💬</Text>
-            <Text style={styles.emptyText}>No messages found</Text>
-            <Text style={styles.emptySubtext}>
-              {activeFilter !== 'all'
-                ? `No ${activeFilter} messages to display`
-                : 'SMS messages will appear here after sync'}
-            </Text>
-          </View>
-        ) : (
-          filteredMessages.map((msg, index) => (
-            <View key={msg._id || index} style={styles.messageItem}>
-              <View style={[
-                styles.messageTypeIndicator,
-                { backgroundColor: msg.type === 'sent' ? COLORS.primary : COLORS.success }
-              ]} />
-              <View style={styles.messageContent}>
-                <View style={styles.messageHeader}>
-                  <Text style={styles.messageAddress}>
-                    {msg.sender}
-                  </Text>
-                  <Text style={styles.messageTime}>
-                    {formatTimestamp(msg.timestamp)}
-                  </Text>
-                </View>
-                <Text style={styles.messageBody}>
-                  {truncateText(msg.message, 80)}
-                </Text>
-                <View style={styles.messageFooter}>
-                  <Text style={[
-                    styles.messageType,
-                    { color: msg.type === 'sent' ? COLORS.primary : COLORS.success }
-                  ]}>
-                    {msg.type}
-                  </Text>
-                </View>
-              </View>
-            </View>
-          ))
-        )}
-      </ScrollView>
+        onEndReached={loadMoreMessages}
+        onEndReachedThreshold={0.5}
+        ListFooterComponent={renderFooter}
+        ListEmptyComponent={renderEmpty}
+        showsVerticalScrollIndicator={true}
+      />
     </SafeAreaView>
   );
 };
@@ -245,15 +317,13 @@ const styles = StyleSheet.create({
     color: COLORS.textWhite,
     fontWeight: '600',
   },
-  scrollContent: {
-    padding: SPACING.lg,
-  },
   statsContainer: {
     flexDirection: 'row',
     backgroundColor: COLORS.surface,
     borderRadius: BORDER_RADIUS.lg,
     padding: SPACING.lg,
-    marginBottom: SPACING.lg,
+    margin: SPACING.lg,
+    marginBottom: SPACING.sm,
   },
   statItem: {
     flex: 1,
@@ -268,6 +338,10 @@ const styles = StyleSheet.create({
     fontSize: FONT_SIZE.xs,
     color: COLORS.textLight,
     marginTop: SPACING.xs,
+  },
+  listContent: {
+    paddingHorizontal: SPACING.lg,
+    paddingBottom: SPACING.xl,
   },
   messageItem: {
     flexDirection: 'row',
@@ -332,6 +406,17 @@ const styles = StyleSheet.create({
     fontSize: FONT_SIZE.md,
     color: COLORS.textLight,
     textAlign: 'center',
+  },
+  footer: {
+    flexDirection: 'row',
+    justifyContent: 'center',
+    alignItems: 'center',
+    paddingVertical: SPACING.lg,
+  },
+  footerText: {
+    fontSize: FONT_SIZE.sm,
+    color: COLORS.textLight,
+    marginLeft: SPACING.sm,
   },
 });
 

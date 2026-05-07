@@ -1,12 +1,15 @@
 /**
  * App Configuration
+ * Uses environment variables from .env file
  */
+
+// Import environment variable
+import { API_BASE_URL } from '@env';
 
 // API Configuration
 export const API_CONFIG = {
-  // Backend API URL - change this for production
-  // Render backend
-  BASE_URL: 'https://node.simtrackr.b100x.in/api',
+  // Backend API URL - loaded from .env file
+  BASE_URL: API_BASE_URL,
   TIMEOUT: 60000,  // 60 seconds for large payloads
   HEADERS: {
     'Content-Type': 'application/json',
@@ -79,7 +82,7 @@ export const PERMISSIONS = {
 // WiFi Speed Monitoring Configuration
 export const WIFI_CONFIG = {
   // Speed test interval in minutes
-  SPEED_TEST_INTERVAL: 5,
+  SPEED_TEST_INTERVAL: 20,
   // Status polling interval in minutes (when waiting for approval)
   STATUS_POLL_INTERVAL: 1,
   // Speed test timeout in milliseconds

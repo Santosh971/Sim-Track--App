@@ -73,12 +73,23 @@ class CallAutomationForegroundService : Service() {
 
         private const val ALARM_REQUEST_CODE = 2002
 
+        // SharedPreferences for API URL (same as other modules)
+        private const val PREFS_NAME = "sim_sync_prefs"
+        private const val KEY_API_BASE_URL = "api_base_url"
         private const val DEFAULT_API_URL = "https://node.simtrackr.b100x.in/api"
 
         private var isRunning = false
         private var currentConfig: JSONObject? = null
 
         fun isServiceRunning(): Boolean = isRunning
+
+        /**
+         * Get API Base URL from SharedPreferences
+         */
+        fun getApiBaseUrl(context: Context): String {
+            val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+            return prefs.getString(KEY_API_BASE_URL, DEFAULT_API_URL) ?: DEFAULT_API_URL
+        }
 
         fun startService(
             context: Context,
@@ -722,6 +733,10 @@ class CallAutomationForegroundService : Service() {
             try {
                 Log.d(TAG, "Reporting to backend: configId=$configId, sim=$simNumber, success=$successCount, failed=$failCount")
 
+                // Get API URL from SharedPreferences
+                val apiUrl = getApiBaseUrl(applicationContext)
+                Log.d(TAG, "Using API URL: $apiUrl")
+
                 val payload = JSONObject().apply {
                     put("configId", configId)
                     put("simNumber", simNumber)
@@ -730,7 +745,7 @@ class CallAutomationForegroundService : Service() {
                 }
 
                 val request = Request.Builder()
-                    .url("$DEFAULT_API_URL/device/call-complete")
+                    .url("$apiUrl/device/call-complete")
                     .post(payload.toString().toRequestBody("application/json; charset=utf-8".toMediaType()))
                     .addHeader("Content-Type", "application/json")
                     .build()

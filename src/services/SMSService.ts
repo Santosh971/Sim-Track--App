@@ -29,7 +29,6 @@ const SYNC_LOCK_TIMEOUT = 2 * 60 * 1000; // 2 minutes timeout for sync lock (red
  * Can be called manually if sync appears stuck
  */
 export const resetSyncLock = () => {
-  console.log('[SMSService] Resetting sync lock');
   isSyncInProgress = false;
   syncLockTime = 0;
 };
@@ -84,22 +83,17 @@ export const SMSService = {
 
       // First check total SMS count on device
       const totalCount = await SMSModule.getSMSCount();
-      console.log('[SMSService] Total SMS count on device:', totalCount);
 
       if (totalCount === 0) {
-        console.log('[SMSService] No SMS messages found on device');
         return [];
       }
 
       // Fetch ALL SMS messages (no timestamp filter)
       // Let backend handle deduplication
-      console.log('[SMSService] READ_SMS permission granted, fetching ALL messages...');
       const messages = await SMSModule.getSMSMessages(); // No timestamp = fetch all
-      console.log('[SMSService] Fetched', messages.length, 'SMS messages from device');
 
       // Log sample messages for debugging
       if (messages.length > 0) {
-        console.log('[SMSService] Sample messages (first 5):');
         messages.slice(0, 5).forEach((msg, idx) => {
           console.log(`[SMSService] Message ${idx + 1}:`, {
             id: msg._id,
@@ -165,18 +159,13 @@ export const SMSService = {
    * Uses phone number from company SIM data as identifier.
    */
   async sync(): Promise<SMSSyncResult> {
-    console.log('[SMSService] ========== SMS SYNC STARTED ==========');
-    console.log('[SMSService] Platform:', Platform.OS);
-    console.log('[SMSService] Sync lock state:', { isSyncInProgress, syncLockTime: syncLockTime ? new Date(syncLockTime).toISOString() : 'never' });
-
+ 
     // Check if sync lock is stale (stuck for more than timeout)
     const now = Date.now();
     if (isSyncInProgress && syncLockTime > 0) {
       const lockAge = now - syncLockTime;
-      console.log('[SMSService] Lock age:', Math.floor(lockAge / 1000), 'seconds');
 
       if (lockAge > SYNC_LOCK_TIMEOUT) {
-        console.log('[SMSService] Sync lock is stale (older than', Math.floor(SYNC_LOCK_TIMEOUT / 60000), 'minutes), releasing it');
         isSyncInProgress = false;
         syncLockTime = 0;
       }
@@ -184,8 +173,6 @@ export const SMSService = {
 
     // Prevent multiple simultaneous syncs
     if (isSyncInProgress) {
-      console.log('[SMSService] Sync already in progress, skipping');
-      console.log('[SMSService] If sync appears stuck, call SMSService.resetSyncLock() to reset');
       return {
         success: false,
         synced: 0,
@@ -197,10 +184,8 @@ export const SMSService = {
     // Acquire sync lock
     isSyncInProgress = true;
     syncLockTime = Date.now();
-    console.log('[SMSService] Sync lock acquired at:', new Date(syncLockTime).toISOString());
 
     if (Platform.OS !== 'android') {
-      console.log('[SMSService] Not Android, skipping');
       isSyncInProgress = false;
       syncLockTime = 0;
       return {
@@ -213,9 +198,7 @@ export const SMSService = {
 
     try {
       // Check permissions FIRST
-      console.log('[SMSService] Checking permissions...');
       const permissions = await this.checkPermissions();
-      console.log('[SMSService] Permissions:', JSON.stringify(permissions));
 
       if (!permissions.readSms) {
         console.error('[SMSService] READ_SMS permission NOT granted');
@@ -227,11 +210,9 @@ export const SMSService = {
         };
       }
 
-      console.log('[SMSService] READ_SMS permission GRANTED');
 
       // Get matched SIMs
       const matchedSIMs = await SIMManager.getMatchedSIMs();
-      console.log('[SMSService] Matched SIMs:', matchedSIMs.length);
 
       if (matchedSIMs.length === 0) {
         return {
@@ -248,12 +229,6 @@ export const SMSService = {
       // Both cases can sync SMS using the phone number as identifier
       const activeSIMs = matchedSIMs.filter(sim => sim.isActive);
 
-      console.log('[SMSService] Active SIMs for SMS sync:', activeSIMs.length);
-      console.log('[SMSService] Active SIMs:', activeSIMs.map(s => ({
-        phone: s.phoneNumber,
-        isFromDevice: s.isFromDevice,
-        slot: s.slotIndex
-      })));
 
       if (activeSIMs.length === 0) {
         // No active SIMs available
@@ -271,7 +246,6 @@ export const SMSService = {
       let hasErrors = false;
 
       for (const sim of activeSIMs) {
-        console.log(`[SMSService] Syncing SMS for SIM: ${sim.phoneNumber} (slot ${sim.slotIndex}, isFromDevice: ${sim.isFromDevice})`);
         const result = await this.syncBySimNumber(sim.phoneNumber);
         if (result.success) {
           totalSynced += result.synced;
@@ -281,8 +255,6 @@ export const SMSService = {
         }
       }
 
-      console.log('[SMSService] ========== SMS SYNC COMPLETE ==========');
-      console.log('[SMSService] Total synced:', totalSynced, ', Total failed:', totalFailed);
 
       return {
         success: !hasErrors,
@@ -306,7 +278,6 @@ export const SMSService = {
       };
     } finally {
       // Always release sync lock
-      console.log('[SMSService] Releasing sync lock');
       isSyncInProgress = false;
       syncLockTime = 0;
     }
@@ -318,14 +289,11 @@ export const SMSService = {
    */
   async syncBySimNumber(simNumber: string): Promise<SMSSyncResult> {
     try {
-      console.log(`[SMSService] ========== SYNC BY SIM NUMBER ==========`);
-      console.log(`[SMSService] Sync SMS for SIM: ${simNumber}`);
 
       // Get SMS messages from device
       let deviceMessages: DeviceSMS[] = [];
       try {
         deviceMessages = await this.getSMSMessages();
-        console.log(`[SMSService] Found ${deviceMessages.length} SMS messages`);
       } catch (fetchError: any) {
         console.error(`[SMSService] Error fetching SMS:`, fetchError.message);
         return {
@@ -337,7 +305,6 @@ export const SMSService = {
       }
 
       if (deviceMessages.length === 0) {
-        console.log(`[SMSService] No SMS messages to sync`);
         return {
           success: true,
           synced: 0,
@@ -348,7 +315,6 @@ export const SMSService = {
 
       // Limit to 50 messages to prevent crashes
       const messagesToSync = deviceMessages.slice(0, 50);
-      console.log(`[SMSService] Syncing ${messagesToSync.length} messages (limited to prevent crash)`);
 
       // Convert to API format
       const messages: APISMS[] = messagesToSync.map(toAPISMS);
@@ -369,11 +335,9 @@ export const SMSService = {
           timeoutPromise
         ]) as any;
 
-        console.log(`[SMSService] API Response:`, JSON.stringify(response));
 
         if (response && response.success) {
           totalSynced = response.data?.synced || response.data?.inserted || messages.length;
-          console.log(`[SMSService] Synced: ${totalSynced} messages`);
         } else {
           hasError = true;
           errorMessage = response?.message || 'API returned error';
@@ -385,7 +349,6 @@ export const SMSService = {
         errorMessage = syncError.message || 'Sync failed';
       }
 
-      console.log(`[SMSService] ========== SYNC COMPLETE ==========`);
 
       return {
         success: !hasError,
@@ -413,7 +376,6 @@ export const SMSService = {
    * Use this when you have SMS data from another source
    */
   async syncMessages(simNumber: string, messages: DeviceSMS[]): Promise<SMSSyncResult> {
-    console.log(`[SMSService] Syncing ${messages.length} messages for ${simNumber}`);
 
     try {
       if (messages.length === 0) {
@@ -489,7 +451,6 @@ export const SMSService = {
    */
   async clearLastSync(): Promise<void> {
     await StorageService.removeItem(LAST_SMS_SYNC_KEY);
-    // console.log('[SMSService] Cleared last SMS sync timestamp');
   },
 
   /**

@@ -18,7 +18,8 @@
       "@services/*": ["src/services/*"],
       "@storage/*": ["src/storage/*"],
       "@native/*": ["src/native/*"],
-      "@utils/*": ["src/utils/*"]
+      "@utils/*": ["src/utils/*"],
+      "@env": ["src/types/env.d.ts"]
     },
     "esModuleInterop": true,
     "skipLibCheck": true,
@@ -26,6 +27,6 @@
     "resolveJsonModule": true,
     "noEmit": true
   },
-  "include": ["**/*.ts", "**/*.tsx"],
+  "include": ["**/*.ts", "**/*.tsx", "src/types/**/*.d.ts"],
   "exclude": ["**/node_modules", "**/Pods", "android", "ios"]
 }

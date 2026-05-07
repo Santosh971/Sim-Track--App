@@ -188,7 +188,6 @@ export const SyncProvider: React.FC<SyncProviderProps> = ({ children }) => {
     SMSService.resetSyncLock();
     setIsSmsSyncing(false);
     setSmsSyncStatus('idle');
-    console.log('[SyncContext] SMS sync lock reset');
   }, []);
 
   // Start or stop the background sync service
@@ -207,7 +206,6 @@ export const SyncProvider: React.FC<SyncProviderProps> = ({ children }) => {
         if (!isRunning) {
           await BackgroundSync.startSync();
           serviceRunning.current = true;
-          console.log('[SyncContext] Background sync service started');
         }
       } else {
         // Stop the background service
@@ -215,7 +213,6 @@ export const SyncProvider: React.FC<SyncProviderProps> = ({ children }) => {
         if (isRunning) {
           await BackgroundSync.stopSync();
           serviceRunning.current = false;
-          console.log('[SyncContext] Background sync service stopped');
         }
       }
     } catch (err) {
@@ -266,13 +263,11 @@ export const SyncProvider: React.FC<SyncProviderProps> = ({ children }) => {
     const eventEmitter = new NativeEventEmitter(BackgroundSyncModule);
 
     const subscription = eventEmitter.addListener('BackgroundSyncTrigger', (data: { simIds?: string[]; syncInterval?: number }) => {
-      console.log('[SyncContext] ========== BACKGROUND SYNC TRIGGERED ==========');
-      console.log('[SyncContext] Data received:', JSON.stringify(data));
+      
 
       // Run syncs SEQUENTIALLY (not parallel) to avoid JS context issues
       setTimeout(async () => {
         try {
-          console.log('[SyncContext] Starting CALL LOG sync...');
           const callLogResult = await sync();
           console.log('[SyncContext] Call log sync result:', JSON.stringify(callLogResult));
         } catch (err) {
@@ -280,14 +275,12 @@ export const SyncProvider: React.FC<SyncProviderProps> = ({ children }) => {
         }
 
         try {
-          console.log('[SyncContext] Starting SMS sync...');
           const smsResult = await syncSMS();
           console.log('[SyncContext] SMS sync result:', JSON.stringify(smsResult));
         } catch (err) {
           console.error('[SyncContext] SMS sync FAILED:', err);
         }
 
-        console.log('[SyncContext] ========== BACKGROUND SYNC COMPLETE ==========');
       }, 0);
     });
 
@@ -307,7 +300,6 @@ export const SyncProvider: React.FC<SyncProviderProps> = ({ children }) => {
 
       if (!email && matchedSIMs.length === 0) {
         // User not logged in and no matched SIMs, don't setup sync
-        console.log('[SyncContext] No authentication or SIMs found, skipping sync setup');
         return;
       }
 
@@ -326,7 +318,6 @@ export const SyncProvider: React.FC<SyncProviderProps> = ({ children }) => {
         const simIds = matchedSIMs.filter(sim => sim.isActive).map(sim => sim.simId);
         if (simIds.length > 0) {
           await BackgroundSync.setValidSIMIds(simIds);
-          console.log('[SyncContext] Set', simIds.length, 'SIM IDs for background sync');
         }
       }
 

@@ -19,17 +19,27 @@ class WiFiSpeedModule(reactContext: ReactApplicationContext) : ReactContextBaseJ
     companion object {
         const val NAME = "WiFiSpeedModule"
         private const val TAG = "WiFiSpeedModule"
-        // Use multiple speed test servers for fallback
+
+        // Reliable CDN endpoints for speed testing with larger files
+        // Cloudflare provides a reliable speed test endpoint with configurable file size
         private val SPEED_TEST_URLS = listOf(
-            "https://speedtest.tele2.net",
-            "https://speed.cloudflare.com",
-            "https://speed.google.com"
+            // Cloudflare speed test - 10MB download (most reliable)
+            "https://speed.cloudflare.com/__down?bytes=10000000",
+            // Cloudflare speed test - 5MB fallback
+            "https://speed.cloudflare.com/__down?bytes=5000000",
+            // Netflix Fast.com test files
+            "https://fast.com/0.5mb",
+            // Linode speed test
+            "https://speedtest.dallas.linode.com/10MB.dallas"
         )
-        private const val DOWNLOAD_TEST_FILE = "/download.php"
-        private const val UPLOAD_TEST_FILE = "/upload.php"
-        private const val PING_TEST_FILE = "/ping.php"
-        // Fallback: Use a simple download test from CDN
-        private const val FALLBACK_TEST_URL = "https://www.google.com"
+
+        // Test duration in seconds
+        private const val TEST_DURATION_SECONDS = 10L
+        // Minimum bytes to download for valid result
+        private const val MIN_BYTES_FOR_VALID_TEST = 100000L // 100KB minimum
+        // Timeout in milliseconds
+        private const val CONNECT_TIMEOUT = 10000
+        private const val READ_TIMEOUT = 30000
     }
 
     private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
@@ -83,7 +93,6 @@ class WiFiSpeedModule(reactContext: ReactApplicationContext) : ReactContextBaseJ
 
                 if (!onWifi) {
                     Log.w(TAG, "Not on WiFi network, returning 0 values")
-                    Log.w(TAG, "Please connect to WiFi to run speed test")
                     withContext(Dispatchers.Main) {
                         promise.resolve(createSpeedTestResult(0.0, 0.0, 0.0))
                     }
@@ -96,7 +105,7 @@ class WiFiSpeedModule(reactContext: ReactApplicationContext) : ReactContextBaseJ
                 val latency = measureLatency()
                 Log.d(TAG, "Latency: $latency ms")
 
-                // Test download speed
+                // Test download speed with improved method
                 val downloadSpeed = measureDownloadSpeed()
                 Log.d(TAG, "Download speed: $downloadSpeed Mbps")
 
@@ -165,86 +174,97 @@ class WiFiSpeedModule(reactContext: ReactApplicationContext) : ReactContextBaseJ
      */
     private fun measureLatency(): Double {
         var totalLatency = 0L
+        var successCount = 0
         val iterations = 3
 
         repeat(iterations) {
             try {
                 val startTime = System.currentTimeMillis()
-                // Use Google as fallback - more reliable
-                val url = URL(FALLBACK_TEST_URL)
+                val url = URL("https://www.google.com")
                 val connection = url.openConnection() as HttpURLConnection
-                connection.requestMethod = "GET"
+                connection.requestMethod = "HEAD"
                 connection.connectTimeout = 5000
                 connection.readTimeout = 5000
                 connection.instanceFollowRedirects = true
                 connection.connect()
-                connection.inputStream.close()
+                val responseCode = connection.responseCode
                 connection.disconnect()
                 val endTime = System.currentTimeMillis()
-                totalLatency += (endTime - startTime)
-                Log.d(TAG, "Latency iteration: ${endTime - startTime}ms")
+
+                if (responseCode == HttpURLConnection.HTTP_OK || responseCode == 301 || responseCode == 302) {
+                    totalLatency += (endTime - startTime)
+                    successCount++
+                    Log.d(TAG, "Latency iteration: ${endTime - startTime}ms")
+                }
             } catch (e: Exception) {
                 Log.w(TAG, "Latency test iteration failed", e)
             }
         }
 
-        val avgLatency = if (totalLatency > 0) totalLatency.toDouble() / iterations else 0.0
-        Log.d(TAG, "Average latency: $avgLatency ms")
+        val avgLatency = if (successCount > 0) totalLatency.toDouble() / successCount else 0.0
+        Log.d(TAG, "Average latency: $avgLatency ms (from $successCount successful tests)")
         return avgLatency
     }
 
     /**
      * Measure download speed by downloading test data
-     * Uses multiple fallback servers
+     * Uses multiple reliable CDN servers with large files
      */
     private fun measureDownloadSpeed(): Double {
-        // Try primary speed test server first
-        for (serverUrl in SPEED_TEST_URLS) {
+        // Try each speed test URL until one works
+        for (testUrl in SPEED_TEST_URLS) {
             try {
-                Log.d(TAG, "Trying speed test server: $serverUrl")
-                val speed = tryDownloadFromServer("$serverUrl$DOWNLOAD_TEST_FILE")
+                Log.d(TAG, "Trying speed test URL: $testUrl")
+                val speed = downloadFromUrl(testUrl)
                 if (speed > 0) {
-                    Log.d(TAG, "Download speed from $serverUrl: $speed Mbps")
+                    Log.d(TAG, "Download speed from $testUrl: $speed Mbps")
                     return speed
                 }
             } catch (e: Exception) {
-                Log.w(TAG, "Speed test failed for $serverUrl: ${e.message}")
+                Log.w(TAG, "Speed test failed for $testUrl: ${e.message}")
             }
         }
 
-        // Fallback: Measure using any HTTP download
+        // All primary tests failed - try fallback with larger download
         return tryFallbackDownloadSpeed()
     }
 
     /**
-     * Try downloading from a specific server
+     * Download from a specific URL and measure speed
+     * Downloads for up to TEST_DURATION_SECONDS or until EOF
      */
-    private fun tryDownloadFromServer(urlString: String): Double {
+    private fun downloadFromUrl(urlString: String): Double {
+        var connection: HttpURLConnection? = null
+        var inputStream: java.io.InputStream? = null
+
         try {
             val startTime = System.nanoTime()
             var totalBytes = 0L
 
             val url = URL(urlString)
-            val connection = url.openConnection() as HttpURLConnection
+            connection = url.openConnection() as HttpURLConnection
             connection.requestMethod = "GET"
-            connection.connectTimeout = 10000
-            connection.readTimeout = 30000
+            connection.connectTimeout = CONNECT_TIMEOUT
+            connection.readTimeout = READ_TIMEOUT
             connection.instanceFollowRedirects = true
             connection.connect()
 
             val responseCode = connection.responseCode
             if (responseCode != HttpURLConnection.HTTP_OK) {
-                Log.w(TAG, "Server returned $responseCode")
-                connection.disconnect()
+                Log.w(TAG, "Server returned $responseCode for $urlString")
                 return 0.0
             }
 
-            val inputStream = connection.inputStream
+            // Get expected content length if available
+            val contentLength = connection.contentLengthLong
+            Log.d(TAG, "Content length: $contentLength bytes")
+
+            inputStream = connection.inputStream
             val buffer = ByteArray(8192)
             var bytesRead: Int
 
-            // Download for up to 5 seconds
-            val maxDuration = TimeUnit.SECONDS.toNanos(5)
+            // Download for up to TEST_DURATION_SECONDS
+            val maxDuration = TimeUnit.SECONDS.toNanos(TEST_DURATION_SECONDS)
             var elapsed = 0L
 
             while (elapsed < maxDuration) {
@@ -252,132 +272,170 @@ class WiFiSpeedModule(reactContext: ReactApplicationContext) : ReactContextBaseJ
                 if (bytesRead == -1) break
                 totalBytes += bytesRead
                 elapsed = System.nanoTime() - startTime
-            }
 
-            inputStream.close()
-            connection.disconnect()
-
-            val endTime = System.nanoTime()
-            val durationSeconds = (endTime - startTime) / 1_000_000_000.0
-
-            if (durationSeconds > 0 && totalBytes > 0) {
-                return (totalBytes * 8) / (durationSeconds * 1_000_000)
-            }
-            return 0.0
-        } catch (e: Exception) {
-            Log.e(TAG, "Download from server failed", e)
-            return 0.0
-        }
-    }
-
-    /**
-     * Fallback: Measure download speed using simple HTTP request
-     */
-    private fun tryFallbackDownloadSpeed(): Double {
-        try {
-            Log.d(TAG, "Using fallback download test from Google")
-
-            // Download Google's favicon or any small file multiple times
-            var totalBytes = 0L
-            val startTime = System.nanoTime()
-
-            repeat(5) {
-                try {
-                    val url = URL("https://www.google.com/favicon.ico")
-                    val connection = url.openConnection() as HttpURLConnection
-                    connection.connectTimeout = 5000
-                    connection.readTimeout = 10000
-                    connection.connect()
-
-                    val input = connection.inputStream
-                    val buffer = ByteArray(4096)
-                    var bytesRead: Int
-
-                    while (input.read(buffer).also { bytesRead = it } != -1) {
-                        totalBytes += bytesRead
-                    }
-
-                    input.close()
-                    connection.disconnect()
-                } catch (e: Exception) {
-                    Log.w(TAG, "Fallback iteration failed", e)
+                // Log progress every 1MB
+                if (totalBytes % 1_000_000 < 8192) {
+                    Log.d(TAG, "Downloaded ${totalBytes / 1_000_000}MB, elapsed: ${elapsed / 1_000_000_000.0}s")
                 }
             }
 
             val endTime = System.nanoTime()
             val durationSeconds = (endTime - startTime) / 1_000_000_000.0
 
-            if (durationSeconds > 0 && totalBytes > 0) {
-                // Estimate speed - this is a rough estimate
-                val estimatedSpeed = (totalBytes * 8) / (durationSeconds * 1_000_000)
-                Log.d(TAG, "Fallback speed estimate: $estimatedSpeed Mbps (based on $totalBytes bytes in ${durationSeconds}s)")
-                return estimatedSpeed
+            Log.d(TAG, "Download complete: $totalBytes bytes in ${durationSeconds}s")
+
+            // Validate - need minimum bytes for accurate result
+            if (durationSeconds > 0 && totalBytes >= MIN_BYTES_FOR_VALID_TEST) {
+                val speedMbps = (totalBytes * 8.0) / (durationSeconds * 1_000_000.0)
+                Log.d(TAG, "Calculated speed: $speedMbps Mbps (${totalBytes} bytes / ${durationSeconds}s)")
+                return speedMbps
+            } else if (totalBytes < MIN_BYTES_FOR_VALID_TEST) {
+                Log.w(TAG, "Downloaded too few bytes ($totalBytes) for accurate measurement")
+            }
+            return 0.0
+        } catch (e: Exception) {
+            Log.e(TAG, "Download from $urlString failed", e)
+            return 0.0
+        } finally {
+            try {
+                inputStream?.close()
+            } catch (e: Exception) {
+                // Ignore
+            }
+            connection?.disconnect()
+        }
+    }
+
+    /**
+     * Fallback: Measure download speed using multiple parallel downloads
+     */
+    private fun tryFallbackDownloadSpeed(): Double {
+        Log.d(TAG, "Using fallback download test with parallel downloads")
+
+        try {
+            // Use Cloudflare with 5MB file as most reliable fallback
+            val testUrl = "https://speed.cloudflare.com/__down?bytes=5000000"
+
+            val totalBytes = java.util.concurrent.atomic.AtomicLong(0L)
+            val startTime = System.nanoTime()
+
+            // Run 3 parallel downloads to better saturate connection
+            val jobs = List(3) {
+                scope.async {
+                    try {
+                        val bytes = downloadBytesOnly(testUrl, 5)
+                        totalBytes.addAndGet(bytes)
+                    } catch (e: Exception) {
+                        Log.w(TAG, "Parallel download failed", e)
+                    }
+                }
+            }
+
+            // Wait for all downloads
+            runBlocking {
+                jobs.awaitAll()
+            }
+
+            val endTime = System.nanoTime()
+            val durationSeconds = (endTime - startTime) / 1_000_000_000.0
+            val finalBytes = totalBytes.get()
+
+            if (durationSeconds > 0 && finalBytes >= MIN_BYTES_FOR_VALID_TEST) {
+                val speedMbps = (finalBytes * 8.0) / (durationSeconds * 1_000_000.0)
+                Log.d(TAG, "Fallback speed: $speedMbps Mbps (${finalBytes} bytes / ${durationSeconds}s)")
+                return speedMbps
             }
         } catch (e: Exception) {
             Log.e(TAG, "Fallback download test failed", e)
         }
+
         return 0.0
     }
 
     /**
-     * Measure upload speed
-     * Note: Most servers don't allow upload tests, so we estimate based on download
+     * Download bytes from URL (helper for parallel downloads)
      */
-    private fun measureUploadSpeed(): Double {
-        // Try to upload to speed test servers
-        for (serverUrl in SPEED_TEST_URLS) {
-            try {
-                val speed = tryUploadToServer("$serverUrl$UPLOAD_TEST_FILE")
-                if (speed > 0) {
-                    return speed
-                }
-            } catch (e: Exception) {
-                Log.d(TAG, "Upload test failed for $serverUrl: ${e.message}")
-            }
-        }
+    private fun downloadBytesOnly(urlString: String, timeoutSeconds: Long): Long {
+        var connection: HttpURLConnection? = null
+        var inputStream: java.io.InputStream? = null
 
-        // If upload test fails, estimate upload as 30% of download (typical ratio)
-        // This is a common approximation for WiFi networks
-        Log.d(TAG, "Upload test unavailable, estimating based on typical WiFi ratio")
-        return 0.0  // Will be calculated in runSpeedTest
+        try {
+            val url = URL(urlString)
+            connection = url.openConnection() as HttpURLConnection
+            connection.requestMethod = "GET"
+            connection.connectTimeout = CONNECT_TIMEOUT
+            connection.readTimeout = (timeoutSeconds * 1000).toInt()
+            connection.connect()
+
+            if (connection.responseCode != HttpURLConnection.HTTP_OK) {
+                return 0L
+            }
+
+            inputStream = connection.inputStream
+            val buffer = ByteArray(8192)
+            var totalBytes = 0L
+            var bytesRead: Int
+
+            val startTime = System.nanoTime()
+            val maxDuration = TimeUnit.SECONDS.toNanos(timeoutSeconds)
+
+            while ((System.nanoTime() - startTime) < maxDuration) {
+                bytesRead = inputStream.read(buffer)
+                if (bytesRead == -1) break
+                totalBytes += bytesRead
+            }
+
+            return totalBytes
+        } catch (e: Exception) {
+            Log.w(TAG, "downloadBytesOnly failed", e)
+            return 0L
+        } finally {
+            try {
+                inputStream?.close()
+            } catch (e: Exception) {}
+            connection?.disconnect()
+        }
     }
 
     /**
-     * Try uploading to a server
+     * Measure upload speed
+     * Uses Cloudflare's upload endpoint if available
      */
-    private fun tryUploadToServer(urlString: String): Double {
+    private fun measureUploadSpeed(): Double {
         try {
-            // Generate 100KB of test data (smaller for faster test)
-            val testData = ByteArray(100_000) { (it % 256).toByte() }
+            // Try Cloudflare upload test
+            val uploadUrl = "https://speed.cloudflare.com/__up"
+            val testData = ByteArray(500_000) { (it % 256).toByte() } // 500KB test data
 
             val startTime = System.nanoTime()
-            val url = URL(urlString)
+            val url = URL(uploadUrl)
             val connection = url.openConnection() as HttpURLConnection
             connection.requestMethod = "POST"
             connection.doOutput = true
-            connection.connectTimeout = 10000
-            connection.readTimeout = 15000
+            connection.connectTimeout = CONNECT_TIMEOUT
+            connection.readTimeout = READ_TIMEOUT
             connection.setRequestProperty("Content-Type", "application/octet-stream")
 
             val outputStream = connection.outputStream
             outputStream.write(testData)
             outputStream.flush()
 
-            // Read response
+            // Read response (ignore content)
             try {
                 connection.inputStream.close()
             } catch (e: Exception) {
-                // Ignore response errors
+                // Ignore
             }
             connection.disconnect()
 
             val endTime = System.nanoTime()
             val durationSeconds = (endTime - startTime) / 1_000_000_000.0
 
-            val totalBytes = testData.size.toLong()
-            return (totalBytes * 8) / (durationSeconds * 1_000_000)
+            val speedMbps = (testData.size * 8.0) / (durationSeconds * 1_000_000.0)
+            Log.d(TAG, "Upload speed: $speedMbps Mbps")
+            return speedMbps
         } catch (e: Exception) {
-            Log.d(TAG, "Upload to server failed", e)
+            Log.d(TAG, "Upload test failed, will estimate from download: ${e.message}")
             return 0.0
         }
     }
