@@ -41,30 +41,46 @@ class WiFiSpeedWorker(
 
         /**
          * Schedule periodic WiFi speed test
-         * @param intervalMinutes Interval in minutes (default 5)
+         * Note: WorkManager enforces minimum 15-minute interval for periodic work
+         * For faster intervals when app is in foreground, JS-based monitoring is used
+         * @param intervalMinutes Interval in minutes (will be clamped to minimum 15 by WorkManager)
          */
         fun scheduleWork(context: Context, configJson: String, intervalMinutes: Long = 5) {
             Log.d(TAG, "========== SCHEDULING WIFI SPEED WORK ==========")
             Log.d(TAG, "Config: $configJson")
-            Log.d(TAG, "Interval: $intervalMinutes minutes")
+            Log.d(TAG, "Requested interval: $intervalMinutes minutes")
 
             try {
                 val config = JSONObject(configJson)
 
+                // Validate config data
+                val simNumber = config.optString("simNumber", "")
+                val deviceId = config.optString("deviceId", "")
+                if (simNumber.isEmpty() || deviceId.isEmpty()) {
+                    Log.e(TAG, "Invalid config: missing simNumber or deviceId")
+                    return
+                }
+
+                // Constraints: only require network connection
+                // Removed setRequiresBatteryNotLow to allow running even on low battery
                 val constraints = Constraints.Builder()
                     .setRequiredNetworkType(NetworkType.CONNECTED)
-                    .setRequiresBatteryNotLow(true)
                     .build()
 
                 val inputData = workDataOf(
-                    KEY_SIM_NUMBER to config.optString("simNumber", ""),
-                    KEY_DEVICE_ID to config.optString("deviceId", ""),
+                    KEY_SIM_NUMBER to simNumber,
+                    KEY_DEVICE_ID to deviceId,
                     KEY_DEVICE_TOKEN to config.optString("deviceToken", ""),
                     KEY_WIFI_CONFIG to configJson
                 )
 
+                // WorkManager enforces minimum 15-minute interval
+                // The actual interval will be clamped by Android
+                val actualInterval = intervalMinutes.coerceAtLeast(15)
+                Log.d(TAG, "Actual interval (WorkManager minimum): $actualInterval minutes")
+
                 val workRequest = PeriodicWorkRequestBuilder<WiFiSpeedWorker>(
-                    intervalMinutes, TimeUnit.MINUTES
+                    actualInterval, TimeUnit.MINUTES
                 )
                     .setConstraints(constraints)
                     .setInputData(inputData)
@@ -82,7 +98,7 @@ class WiFiSpeedWorker(
                         workRequest
                     )
 
-                Log.d(TAG, "WiFi speed work scheduled successfully")
+                Log.d(TAG, "WiFi speed work scheduled successfully with interval: $actualInterval minutes")
             } catch (e: Exception) {
                 Log.e(TAG, "Error scheduling WiFi speed work", e)
             }
@@ -115,17 +131,22 @@ class WiFiSpeedWorker(
             val deviceId = inputData.getString(KEY_DEVICE_ID)
             val deviceToken = inputData.getString(KEY_DEVICE_TOKEN)
 
-            if (simNumber.isNullOrEmpty() || deviceId.isNullOrEmpty()) {
-                Log.w(TAG, "Missing config data, skipping")
-                return@withContext Result.success()
+            Log.d(TAG, "Worker config: simNumber=$simNumber, deviceId=$deviceId, hasToken=${!deviceToken.isNullOrEmpty()}")
+
+            if (simNumber.isNullOrEmpty()) {
+                Log.e(TAG, "Missing simNumber, skipping this run")
+                return@withContext Result.success() // Don't retry - config issue
             }
 
-            Log.d(TAG, "Config: simNumber=$simNumber, deviceId=$deviceId")
+            if (deviceId.isNullOrEmpty()) {
+                Log.e(TAG, "Missing deviceId, skipping this run")
+                return@withContext Result.success() // Don't retry - config issue
+            }
 
             // Check if on WiFi
             if (!isOnWifi()) {
-                Log.d(TAG, "Not on WiFi, skipping speed test")
-                return@withContext Result.success()
+                Log.d(TAG, "Not on WiFi, skipping speed test this run")
+                return@withContext Result.success() // Success - just not on WiFi
             }
 
             // Get current WiFi info
@@ -136,22 +157,22 @@ class WiFiSpeedWorker(
             Log.d(TAG, "WiFi Info: SSID=$ssid, BSSID=$bssid")
 
             if (ssid.isNullOrEmpty()) {
-                Log.w(TAG, "No valid SSID, skipping")
-                return@withContext Result.success()
+                Log.w(TAG, "No valid SSID (may need location permission), continuing anyway")
+                // Continue even without SSID - some networks don't expose SSID
             }
 
             // Run speed test
-            Log.d(TAG, "Running speed test...")
+            Log.d(TAG, "Starting speed test...")
             val speedResult = runSpeedTest()
 
-            Log.d(TAG, "Speed test result: download=${speedResult.download} Mbps, upload=${speedResult.upload} Mbps, latency=${speedResult.latency} ms")
+            Log.d(TAG, "Speed test result: download=${String.format("%.2f", speedResult.download)} Mbps, upload=${String.format("%.2f", speedResult.upload)} Mbps, latency=${String.format("%.0f", speedResult.latency)} ms")
 
             // Submit to backend
             val submitted = submitSpeedTest(
                 simNumber = simNumber,
                 deviceId = deviceId,
                 deviceToken = deviceToken ?: "",
-                ssid = ssid,
+                ssid = ssid ?: "Unknown",
                 bssid = bssid ?: "",
                 downloadSpeed = speedResult.download,
                 uploadSpeed = speedResult.upload,
@@ -159,17 +180,17 @@ class WiFiSpeedWorker(
             )
 
             if (submitted) {
-                Log.d(TAG, "WiFi speed submitted successfully")
+                Log.d(TAG, "✓ WiFi speed submitted successfully")
             } else {
-                Log.w(TAG, "Failed to submit WiFi speed")
+                Log.w(TAG, "✗ Failed to submit WiFi speed (will retry next run)")
             }
 
             Log.d(TAG, "========== WIFI SPEED WORKER COMPLETE ==========")
             Result.success()
 
         } catch (e: Exception) {
-            Log.e(TAG, "WiFi speed worker error", e)
-            Result.retry()
+            Log.e(TAG, "✗ WiFi speed worker error: ${e.message}", e)
+            Result.retry() // Retry on transient errors
         }
     }
 

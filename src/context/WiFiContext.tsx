@@ -280,27 +280,41 @@ export const WiFiProvider: React.FC<WiFiProviderProps> = ({ children }) => {
 
   /**
    * Start background monitoring
-   * UNCHANGED
+   * FIXED: Now properly awaits the async startBackgroundMonitoring
    */
-  const startMonitoring = useCallback(() => {
+  const startMonitoring = useCallback(async () => {
     if (!isActive) {
       console.warn('[WiFiContext] Cannot start monitoring - device not active');
       return;
     }
 
+    console.log('[WiFiContext] Starting background monitoring...');
     setIsMonitoring(true);
 
-    WiFiService.startBackgroundMonitoring();
+    try {
+      await WiFiService.startBackgroundMonitoring();
+      console.log('[WiFiContext] Background monitoring started successfully');
+    } catch (err: any) {
+      console.error('[WiFiContext] Failed to start background monitoring:', err);
+      setIsMonitoring(false);
+      setError(err.message || 'Failed to start background monitoring');
+    }
   }, [isActive]);
 
   /**
    * Stop background monitoring
-   * UNCHANGED
+   * FIXED: Now properly awaits the async stopBackgroundMonitoring
    */
-  const stopMonitoring = useCallback(() => {
+  const stopMonitoring = useCallback(async () => {
+    console.log('[WiFiContext] Stopping background monitoring...');
     setIsMonitoring(false);
 
-    WiFiService.stopBackgroundMonitoring();
+    try {
+      await WiFiService.stopBackgroundMonitoring();
+      console.log('[WiFiContext] Background monitoring stopped successfully');
+    } catch (err: any) {
+      console.error('[WiFiContext] Failed to stop background monitoring:', err);
+    }
   }, []);
 
   /**

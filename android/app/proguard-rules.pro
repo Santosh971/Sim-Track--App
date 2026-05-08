@@ -8,3 +8,15 @@
 #   http://developer.android.com/guide/developing/tools/proguard.html
 
 # Add any project specific keep options here:
+
+# Keep WorkManager Worker classes
+-keep class com.sim_management.workers.** { *; }
+-keep class com.sim_management.modules.** { *; }
+-keep class com.sim_management.services.** { *; }
+-keep class com.sim_management.receivers.** { *; }
+
+# Keep all React Native native module methods
+-keep class com.facebook.react.bridge.** { *; }
+-keepclassmembers class * extends com.facebook.react.bridge.ReactContextBaseJavaModule {
+    @com.facebook.react.bridge.ReactMethod <methods>;
+}

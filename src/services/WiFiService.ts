@@ -1157,6 +1157,7 @@ export const WiFiService = {
   /**
    * Run speed test and submit results
    * FIXED: Better error handling for WiFi connection issues
+   * FIXED: Added config validation before submission
    */
   async runSpeedTestAndSubmit(): Promise<{
     success: boolean;
@@ -1164,38 +1165,75 @@ export const WiFiService = {
     error?: string;
   }> {
     try {
-      console.log('[WiFiService] Running speed test and submitting...');
+      console.log('[WiFiService] ========== RUN SPEED TEST AND SUBMIT ==========');
+
+      // Check if we have config data
+      const simNumber = await AsyncStorage.getItem(WIFI_SELECTED_SIM_KEY);
+      const deviceId = await AsyncStorage.getItem(WIFI_DEVICE_ID_KEY);
+      const deviceToken = await AsyncStorage.getItem(WIFI_DEVICE_TOKEN_KEY);
+
+      console.log('[WiFiService] Config check:', {
+        hasSimNumber: !!simNumber,
+        hasDeviceId: !!deviceId,
+        hasDeviceToken: !!deviceToken,
+      });
+
+      if (!simNumber || !deviceId) {
+        console.error('[WiFiService] ✗ Missing required config - cannot submit metrics');
+        console.error('[WiFiService] simNumber:', simNumber ? 'present' : 'missing');
+        console.error('[WiFiService] deviceId:', deviceId ? 'present' : 'missing');
+        return {
+          success: false,
+          error: 'WiFi monitoring not initialized. Please complete setup first.',
+        };
+      }
 
       // First check if on WiFi
       const wifiStatus = await this.checkWiFiAndNetworkStatus();
+      console.log('[WiFiService] WiFi status:', {
+        isOnWifi: wifiStatus.isOnWifi,
+        hasValidSSID: wifiStatus.hasValidSSID,
+        ssid: wifiStatus.ssid,
+        canReachInternet: wifiStatus.canReachInternet,
+      });
+
       if (!wifiStatus.isOnWifi) {
-        console.warn('[WiFiService] Not on WiFi, skipping speed test');
+        console.warn('[WiFiService] ✗ Not on WiFi, skipping speed test');
         return {
           success: false,
           error: 'Not connected to WiFi. Please connect to a WiFi network.',
         };
       }
 
+      console.log('[WiFiService] Running speed test...');
       const result = await this.performSpeedTest();
+      console.log('[WiFiService] Speed test result:', {
+        download: result.download.toFixed(2) + ' Mbps',
+        upload: result.upload.toFixed(2) + ' Mbps',
+        latency: result.latency.toFixed(0) + ' ms',
+      });
 
       // Check if speed test returned valid results
       if (result.download === 0 && result.upload === 0 && result.latency === 0) {
-        console.warn('[WiFiService] Speed test returned zeros, not submitting');
+        console.warn('[WiFiService] ✗ Speed test returned zeros, not submitting');
         return {
           success: false,
           error: 'Speed test returned invalid results. Please try again.',
         };
       }
 
+      console.log('[WiFiService] Submitting metrics to backend...');
       const submitResult = await this.submitMetrics(result);
 
       if (submitResult.success) {
+        console.log('[WiFiService] ✓ Metrics submitted successfully');
         return { success: true, result };
       } else {
+        console.error('[WiFiService] ✗ Failed to submit metrics:', submitResult.message);
         return { success: false, error: submitResult.message };
       }
     } catch (error: any) {
-      console.error('[WiFiService] Speed test and submit error:', error);
+      console.error('[WiFiService] ✗ Speed test and submit error:', error);
       return { success: false, error: error.message || 'Speed test failed' };
     }
   },
@@ -1206,8 +1244,12 @@ export const WiFiService = {
 
   /**
    * Start background monitoring
-   * Uses native WorkManager for reliable background execution
-   * Runs speed test every SPEED_TEST_INTERVAL minutes
+   * Uses BOTH approaches:
+   * 1. Native WorkManager for background (minimum 15-minute intervals - Android limit)
+   * 2. JavaScript setInterval for foreground (5-minute intervals - when app is open)
+   *
+   * This ensures speed tests run at 5-minute intervals when app is in foreground,
+   * and at 15-minute intervals when app is in background.
    */
   async startBackgroundMonitoring(): Promise<void> {
     if (this.isMonitoring) {
@@ -1215,7 +1257,7 @@ export const WiFiService = {
       return;
     }
 
-    console.log('[WiFiService] Starting background monitoring (native)');
+    console.log('[WiFiService] Starting background monitoring...');
 
     try {
       // Set API Base URL in native SharedPreferences for workers
@@ -1230,7 +1272,9 @@ export const WiFiService = {
 
       if (!simNumber || !deviceId) {
         console.warn('[WiFiService] Missing config for background monitoring');
-        return;
+        console.warn('[WiFiService] simNumber:', simNumber ? 'present' : 'missing');
+        console.warn('[WiFiService] deviceId:', deviceId ? 'present' : 'missing');
+        // Don't return - still start foreground monitoring
       }
 
       // Create config JSON for the native worker
@@ -1241,65 +1285,120 @@ export const WiFiService = {
         tokenExpires,
       });
 
-      // Start the native background worker
-      await BackgroundSync.startWiFiSpeedBackground(configJson, WIFI_CONFIG.SPEED_TEST_INTERVAL);
+      // Start the native background worker (15-minute minimum on Android)
+      // This handles background execution when app is closed
+      if (simNumber && deviceId) {
+        try {
+          await BackgroundSync.startWiFiSpeedBackground(configJson, WIFI_CONFIG.SPEED_TEST_INTERVAL);
+          console.log('[WiFiService] Native WorkManager worker started (15-min intervals in background)');
+        } catch (bgError) {
+          console.warn('[WiFiService] Failed to start native worker:', bgError);
+          // Continue with foreground monitoring
+        }
+      }
+
+      // Also store config in native preferences for worker access
+      try {
+        await BackgroundSync.setWiFiConfig(simNumber, deviceId, deviceToken || '', tokenExpires || '', '[]');
+        console.log('[WiFiService] WiFi config stored in native preferences');
+      } catch (configError) {
+        console.warn('[WiFiService] Failed to store WiFi config:', configError);
+      }
 
       this.isMonitoring = true;
-      console.log('[WiFiService] Native background monitoring started');
 
-      // Also run immediately in foreground
+      // Start foreground JavaScript interval (5-minute intervals when app is open)
+      this.startForegroundInterval();
+
+      console.log('[WiFiService] Background monitoring started successfully');
+      console.log('[WiFiService] - Foreground: 5-minute intervals via JS setInterval');
+      console.log('[WiFiService] - Background: 15-minute intervals via WorkManager');
+    } catch (error) {
+      console.error('[WiFiService] Failed to start background monitoring:', error);
+      // Still try to start foreground monitoring
+      this.startForegroundInterval();
+    }
+  },
+
+  /**
+   * Start foreground JavaScript interval
+   * Runs speed tests at WIFI_CONFIG.SPEED_TEST_INTERVAL (5 minutes)
+   * Only works when app is in foreground
+   */
+  startForegroundInterval(): void {
+    console.log('[WiFiService] Starting foreground interval (5-minute intervals when app is open)');
+
+    // Clear any existing interval first
+    if (this.monitoringInterval) {
+      clearInterval(this.monitoringInterval);
+      this.monitoringInterval = null;
+    }
+
+    // Run immediately after a short delay to ensure config is ready
+    setTimeout(() => {
+      console.log('[WiFiService] Running initial speed test...');
       this.runSpeedTestAndSubmit().catch(err => {
         console.error('[WiFiService] Initial speed test failed:', err);
       });
-    } catch (error) {
-      console.error('[WiFiService] Failed to start background monitoring:', error);
-      // Fallback to JavaScript interval
-      this.startFallbackMonitoring();
-    }
+    }, 1000);
+
+    // Then run at configured interval (5 minutes)
+    const intervalMs = WIFI_CONFIG.SPEED_TEST_INTERVAL * 60 * 1000;
+    console.log('[WiFiService] Setting up foreground interval:', WIFI_CONFIG.SPEED_TEST_INTERVAL, 'minutes (' + intervalMs + 'ms)');
+
+    this.monitoringInterval = setInterval(() => {
+      console.log('[WiFiService] Running scheduled foreground speed test...');
+      this.runSpeedTestAndSubmit().catch(err => {
+        console.error('[WiFiService] Scheduled foreground speed test failed:', err);
+      });
+    }, intervalMs);
+
+    console.log('[WiFiService] Foreground interval set, next test in:', intervalMs / 1000, 'seconds');
   },
 
   /**
    * Fallback monitoring using JavaScript setInterval
    * Only works when app is in foreground
+   * @deprecated - Use startForegroundInterval instead
    */
   startFallbackMonitoring(): void {
     console.log('[WiFiService] Starting fallback monitoring (foreground only)');
-    this.isMonitoring = true;
-
-    // Run immediately
-    this.runSpeedTestAndSubmit().catch(err => {
-      console.error('[WiFiService] Initial speed test failed:', err);
-    });
-
-    // Then run at interval
-    this.monitoringInterval = setInterval(() => {
-      console.log('[WiFiService] Running scheduled speed test...');
-      this.runSpeedTestAndSubmit().catch(err => {
-        console.error('[WiFiService] Scheduled speed test failed:', err);
-      });
-    }, WIFI_CONFIG.SPEED_TEST_INTERVAL * 60 * 1000);
+    this.startForegroundInterval();
   },
 
   /**
    * Stop background monitoring
+   * Stops both foreground JS interval and background WorkManager
    */
   async stopBackgroundMonitoring(): Promise<void> {
     console.log('[WiFiService] Stopping background monitoring');
 
     this.isMonitoring = false;
 
-    // Stop native worker
+    // Stop foreground JavaScript interval
+    if (this.monitoringInterval) {
+      clearInterval(this.monitoringInterval);
+      this.monitoringInterval = null;
+      console.log('[WiFiService] Stopped foreground interval');
+    }
+
+    // Stop native WorkManager worker
     try {
       await BackgroundSync.stopWiFiSpeedBackground();
+      console.log('[WiFiService] Stopped native WorkManager worker');
     } catch (error) {
       console.warn('[WiFiService] Failed to stop native worker:', error);
     }
 
-    // Stop fallback interval
-    if (this.monitoringInterval) {
-      clearInterval(this.monitoringInterval);
-      this.monitoringInterval = null;
+    // Disable WiFi speed in native preferences
+    try {
+      await BackgroundSync.setWiFiSpeedEnabled(false);
+      console.log('[WiFiService] Disabled WiFi speed in native preferences');
+    } catch (error) {
+      console.warn('[WiFiService] Failed to disable WiFi speed:', error);
     }
+
+    console.log('[WiFiService] Background monitoring stopped completely');
   },
 
   /**
@@ -1309,7 +1408,7 @@ export const WiFiService = {
     try {
       const isRunning = await BackgroundSync.isWiFiSpeedBackgroundRunning();
       return isRunning || this.isMonitoring;
-    } catch (error) {
+    } catch {
       return this.isMonitoring;
     }
   },

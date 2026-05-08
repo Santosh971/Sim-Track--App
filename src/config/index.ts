@@ -81,8 +81,10 @@ export const PERMISSIONS = {
 
 // WiFi Speed Monitoring Configuration
 export const WIFI_CONFIG = {
-  // Speed test interval in minutes
-  SPEED_TEST_INTERVAL: 20,
+  // Speed test interval in minutes (used for foreground JS-based monitoring)
+  // Note: Android WorkManager has minimum 15-minute interval for background
+  // This 5-minute interval works when app is in foreground
+  SPEED_TEST_INTERVAL: 5,
   // Status polling interval in minutes (when waiting for approval)
   STATUS_POLL_INTERVAL: 1,
   // Speed test timeout in milliseconds
