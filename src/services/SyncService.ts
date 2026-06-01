@@ -143,7 +143,7 @@ export const SyncService = {
       failed: totalFailed,
       message: hasErrors
         ? `Synced ${totalSynced} logs, ${totalFailed} failed`
-        : `Successfully synced ${totalSynced} call logs`,
+        : `Successfully synced call logs`,
       simResults,
     };
   },
@@ -228,7 +228,7 @@ export const SyncService = {
         failed: totalFailed,
         message: hasError
           ? `Partially synced: ${totalSynced} success, ${totalFailed} failed`
-          : `Successfully synced ${totalSynced} call logs`,
+          : `Successfully synced  call logs`,
       };
     } catch (error: any) {
       console.error(`[SyncService] Sync error for SIM ${sim.simId}:`, error);
@@ -341,7 +341,7 @@ export const SyncService = {
         failed: totalFailed,
         message: hasError
           ? `Partially synced: ${totalSynced} success, ${totalFailed} failed`
-          : `Successfully synced ${totalSynced} call logs`,
+          : `Successfully synced  call logs`,
       };
     } catch (error: any) {
       console.error('[SyncService] Legacy sync error:', error);

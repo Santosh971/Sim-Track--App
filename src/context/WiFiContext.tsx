@@ -45,10 +45,12 @@ export const WiFiProvider: React.FC<WiFiProviderProps> = ({ children }) => {
    * Initialize WiFi monitoring
    * UPDATED: Uses SIM-based auto-authentication internally
    * UPDATED: Checks battery optimization status
-   * companyId parameter kept for backward compatibility but not used in new flow
+   * UPDATED: Accepts optional preferredSimNumber for reinitialization
+   * @param companyId - Company ID (kept for backward compatibility, not used in new flow)
+   * @param preferredSimNumber - Optional SIM number to try first during authentication
    */
-  const initialize = useCallback(async (companyId: string) => {
-   
+  const initialize = useCallback(async (companyId: string, preferredSimNumber?: string) => {
+
     setStatus('idle');
     setError(null);
     companyIdRef.current = companyId;
@@ -63,7 +65,8 @@ export const WiFiProvider: React.FC<WiFiProviderProps> = ({ children }) => {
 
       // Call the updated WiFiService.initialize()
       // This now uses SIM-based auto-auth internally
-      const result = await WiFiService.initialize(companyId);
+      // Pass preferredSimNumber if provided (useful for reinitialization)
+      const result = await WiFiService.initialize(companyId, preferredSimNumber);
 
       if (result.success) {
         // Get device info
@@ -173,6 +176,7 @@ export const WiFiProvider: React.FC<WiFiProviderProps> = ({ children }) => {
    * Reinitialize WiFi monitoring
    * Clears all stored data and re-authenticates with the server
    * Use this when switching WiFi networks to get updated config from admin panel
+   * UPDATED: Now preserves the previously used SIM number and tries it first during re-auth
    */
   const reinitialize = useCallback(async (companyId: string) => {
     console.log('[WiFiContext] Reinitializing WiFi monitoring...');
@@ -192,12 +196,13 @@ export const WiFiProvider: React.FC<WiFiProviderProps> = ({ children }) => {
     setCurrentWifiSSID(null);
 
     try {
-      // Clear stored WiFi data
-      await WiFiService.clearSelectedSimData();
-      console.log('[WiFiContext] Cleared stored WiFi data');
+      // Clear stored WiFi data and get the previously used SIM number
+      const previousSimNumber = await WiFiService.clearSelectedSimData();
+      console.log('[WiFiContext] Cleared stored WiFi data, previous SIM:', previousSimNumber || 'none');
 
       // Re-initialize (will re-authenticate with server)
-      await initialize(companyId);
+      // Pass the previous SIM number as preferred for re-auth
+      await initialize(companyId, previousSimNumber || undefined);
 
       // Validate current WiFi after reinitialization
       const wifiValidation = await validateCurrentWifi();

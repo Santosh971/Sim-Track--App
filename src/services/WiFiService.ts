@@ -215,14 +215,19 @@ export const WiFiService = {
   /**
    * Auto-select SIM by trying each one for authentication
    * Returns the first SIM that successfully authenticates
+   * @param deviceId - Device ID for authentication
+   * @param preferredSimNumber - Optional SIM number to try first (useful for reinitialization)
    */
-  async autoSelectSim(deviceId: string): Promise<{
+  async autoSelectSim(deviceId: string, preferredSimNumber?: string): Promise<{
     success: boolean;
     selectedSim?: SelectedSIMData;
     error?: string;
   }> {
     console.log('[WiFiService] Starting SIM auto-selection...');
     console.log('[WiFiService] Device ID:', deviceId);
+    if (preferredSimNumber) {
+      console.log('[WiFiService] Preferred SIM (will try first):', preferredSimNumber);
+    }
 
     // Get all SIM numbers from device
     const allSIMs = await this.getAllSimNumbers();
@@ -237,8 +242,32 @@ export const WiFiService = {
 
     console.log(`[WiFiService] Found ${allSIMs.length} SIM(s), attempting auto-auth for each...`);
 
+    // Reorder SIMs: if preferredSimNumber exists, try it first
+    let orderedSIMs = [...allSIMs];
+    if (preferredSimNumber) {
+      // Normalize the preferred number for comparison
+      const normalizedPreferred = this.normalizePhoneNumber(preferredSimNumber);
+
+      // Split into preferred (matching) and others
+      const preferredSIMs = orderedSIMs.filter(sim =>
+        this.normalizePhoneNumber(sim.phoneNumber) === normalizedPreferred
+      );
+      const otherSIMs = orderedSIMs.filter(sim =>
+        this.normalizePhoneNumber(sim.phoneNumber) !== normalizedPreferred
+      );
+
+      // Preferred SIMs first, then others
+      orderedSIMs = [...preferredSIMs, ...otherSIMs];
+
+      if (preferredSIMs.length > 0) {
+        console.log(`[WiFiService] Reordered SIMs: trying preferred SIM (${preferredSIMs[0].phoneNumber}) first`);
+      } else {
+        console.log(`[WiFiService] Preferred SIM ${preferredSimNumber} not found in device SIMs, trying all available`);
+      }
+    }
+
     // Try each SIM until one succeeds
-    for (const sim of allSIMs) {
+    for (const sim of orderedSIMs) {
       console.log(`[WiFiService] Trying SIM at slot ${sim.slotIndex}: ${sim.phoneNumber}`);
 
       try {
@@ -792,14 +821,19 @@ export const WiFiService = {
   /**
    * Initialize WiFi monitoring for a company
    * NEW: Uses SIM-based auto-authentication
+   * @param companyId - Company ID (kept for backward compatibility, not used in new flow)
+   * @param preferredSimNumber - Optional SIM number to try first during authentication
    */
-  async initialize(companyId: string): Promise<{
+  async initialize(companyId: string, preferredSimNumber?: string): Promise<{
     success: boolean;
     isActive: boolean;
     message: string;
   }> {
     console.log('[WiFiService] Initializing WiFi monitoring...');
     console.log('[WiFiService] Company ID (received but not used in new flow):', companyId);
+    if (preferredSimNumber) {
+      console.log('[WiFiService] Preferred SIM for auth:', preferredSimNumber);
+    }
 
     try {
       // 1. Get or create device ID
@@ -835,16 +869,33 @@ export const WiFiService = {
               message: 'Device active, ready to monitor',
             };
           } else {
-            // Validation failed, try re-authenticating
+            // Validation failed, try re-authenticating with the same SIM
             console.log('[WiFiService] Validation failed, re-authenticating...');
-            // Clear old data and re-auth
+            // Save the current SIM number before clearing
+            const savedSimNumber = selectedSim.simNumber;
+            // Clear old data and re-auth with preferred SIM
             await this.clearSelectedSimData();
+            // Use the saved SIM as preferred for re-auth
+            const selectionResult = await this.autoSelectSim(deviceId, savedSimNumber);
+
+            if (selectionResult.success && selectionResult.selectedSim) {
+              console.log('[WiFiService] Re-authenticated with SIM:', selectionResult.selectedSim.simNumber);
+              return {
+                success: true,
+                isActive: true,
+                message: 'Device re-authenticated successfully',
+              };
+            }
+
+            // If re-auth with saved SIM failed, try other SIMs
+            console.log('[WiFiService] Saved SIM auth failed, trying all SIMs...');
           }
         }
       }
 
       // 3. Auto-select SIM (multi-SIM support)
-      const selectionResult = await this.autoSelectSim(deviceId);
+      // Pass preferredSimNumber if provided (from reinitialize)
+      const selectionResult = await this.autoSelectSim(deviceId, preferredSimNumber);
 
       if (selectionResult.success && selectionResult.selectedSim) {
         console.log('[WiFiService] SIM selected:', selectionResult.selectedSim.simNumber);
@@ -1476,9 +1527,23 @@ export const WiFiService = {
   /**
    * Clear selected SIM data
    * Also clears WiFi config from native preferences
+   * @returns The cleared SIM number (if any) for use in reinitialization
    */
-  async clearSelectedSimData(): Promise<void> {
+  async clearSelectedSimData(): Promise<string | null> {
+    let clearedSimNumber: string | null = null;
+
     try {
+      // Get the current SIM number before clearing
+      try {
+        const simNumber = await AsyncStorage.getItem(WIFI_SELECTED_SIM_KEY);
+        if (simNumber) {
+          clearedSimNumber = simNumber;
+          console.log('[WiFiService] Saved SIM number before clearing:', clearedSimNumber);
+        }
+      } catch (e) {
+        console.warn('[WiFiService] Could not get SIM number before clearing:', e);
+      }
+
       await AsyncStorage.multiRemove([
         WIFI_SELECTED_SIM_KEY,
         WIFI_DEVICE_TOKEN_KEY,
@@ -1503,6 +1568,8 @@ export const WiFiService = {
     } catch (error) {
       console.error('[WiFiService] Error clearing SIM data:', error);
     }
+
+    return clearedSimNumber;
   },
 
   /**

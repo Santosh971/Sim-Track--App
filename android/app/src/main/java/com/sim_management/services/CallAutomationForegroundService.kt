@@ -76,7 +76,7 @@ class CallAutomationForegroundService : Service() {
         // SharedPreferences for API URL (same as other modules)
         private const val PREFS_NAME = "sim_sync_prefs"
         private const val KEY_API_BASE_URL = "api_base_url"
-        private const val DEFAULT_API_URL = "https://node.simtrackr.b100x.in/api"
+        private const val DEFAULT_API_URL = "https://simmanagement-2-2.onrender.com/api"
 
         private var isRunning = false
         private var currentConfig: JSONObject? = null
@@ -547,36 +547,69 @@ class CallAutomationForegroundService : Service() {
                     val simSlotIndex = config.optInt("simSlotIndex", 0)
                     val simPhoneNumber = config.optString("simPhoneNumber", "Unknown")
 
+                    // Log the raw targets array for debugging
+                    Log.d(TAG, "========== TARGETS DEBUG ==========")
+                    Log.d(TAG, "Raw targets array: ${targets?.toString()}")
+                    Log.d(TAG, "Targets count: ${targets?.length() ?: 0}")
+
                     if (targets == null || targets.length() == 0) {
-                        Log.e(TAG, "No targets configured")
+                        Log.e(TAG, "No targets configured - stopping execution")
                         return@launch
                     }
 
-                    Log.d(TAG, "Targets: ${targets.length()}, Duration: ${callDuration}s, SIM: $simPhoneNumber")
+                    // Parse all targets first for logging
+                    val parsedTargets = mutableListOf<Pair<String, Int>>()
+                    for (i in 0 until targets.length()) {
+                        val targetObj = targets.optJSONObject(i)
+                        if (targetObj != null) {
+                            val number = targetObj.optString("mobileNumber", "")
+                            val duration = targetObj.optInt("callDuration", callDuration)
+                            parsedTargets.add(Pair(number, duration))
+                            Log.d(TAG, "Target ${i + 1}: number=$number, duration=$duration (object format)")
+                        } else {
+                            val number = targets.getString(i)
+                            parsedTargets.add(Pair(number, callDuration))
+                            Log.d(TAG, "Target ${i + 1}: number=$number, duration=$callDuration (string format)")
+                        }
+                    }
+                    Log.d(TAG, "Parsed ${parsedTargets.size} targets to call")
+                    Log.d(TAG, "====================================")
 
-                    updateNotification("Making calls... (${targets.length()} targets)")
+                    Log.d(TAG, "Config: Duration: ${callDuration}s, SIM: $simPhoneNumber")
+
+                    updateNotification("Making calls... (${parsedTargets.size} targets)")
 
                     var successCount = 0
                     var failCount = 0
 
-                    for (i in 0 until targets.length()) {
-                        val targetNumber = targets.getString(i)
+                    for ((index, target) in parsedTargets.withIndex()) {
+                        val targetNumber = target.first
+                        val targetDuration = target.second
 
-                        Log.d(TAG, "Calling target ${i + 1}/${targets.length()}: $targetNumber")
-                        updateNotification("Calling $targetNumber (${i + 1}/${targets.length()})")
+                        if (targetNumber.isNullOrEmpty()) {
+                            Log.w(TAG, "Skipping target ${index + 1}: empty phone number")
+                            continue
+                        }
 
-                        val success = makeCall(targetNumber, simSlotIndex, callDuration)
+                        Log.d(TAG, "========== CALL ${index + 1}/${parsedTargets.size} ==========")
+                        Log.d(TAG, "Target: $targetNumber")
+                        Log.d(TAG, "Duration: ${targetDuration}s")
+                        Log.d(TAG, "SIM Slot: $simSlotIndex (Caller: $simPhoneNumber)")
+
+                        updateNotification("Calling $targetNumber (${index + 1}/${parsedTargets.size})")
+
+                        val success = makeCall(targetNumber, simSlotIndex, targetDuration)
 
                         if (success) {
                             successCount++
-                            Log.d(TAG, "Call ${i + 1} SUCCESS")
+                            Log.d(TAG, "Call ${index + 1}/${parsedTargets.size} SUCCESS")
                         } else {
                             failCount++
-                            Log.e(TAG, "Call ${i + 1} FAILED")
+                            Log.e(TAG, "Call ${index + 1}/${parsedTargets.size} FAILED")
                         }
 
                         // Wait between calls
-                        if (i < targets.length() - 1) {
+                        if (index < parsedTargets.size - 1) {
                             Log.d(TAG, "Waiting 3 seconds before next call...")
                             delay(3000)
                         }

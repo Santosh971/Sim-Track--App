@@ -32,6 +32,7 @@ interface SyncContextValue {
   // Methods
   sync: () => Promise<SyncResult>;
   syncSMS: () => Promise<{ success: boolean; synced: number; failed: number; message: string }>;
+  syncSMSForRegisteredSim: () => Promise<{ success: boolean; synced: number; failed: number; message: string }>;
   resetSmsSyncLock: () => void;
   setSyncInterval: (minutes: number) => Promise<void>;
   setAutoSyncEnabled: (enabled: boolean) => Promise<void>;
@@ -158,6 +159,47 @@ export const SyncProvider: React.FC<SyncProviderProps> = ({ children }) => {
 
     try {
       const result = await SMSService.sync();
+
+      if (result.success) {
+        setSmsSyncStatus('success');
+      } else {
+        setSmsSyncStatus('error');
+      }
+
+      // Refresh state
+      await refreshSyncState();
+
+      return result;
+    } catch (err: any) {
+      setSmsSyncStatus('error');
+      return {
+        success: false,
+        synced: 0,
+        failed: 0,
+        message: err.message || 'SMS sync failed',
+        error: err.message,
+      };
+    } finally {
+      setIsSmsSyncing(false);
+    }
+  }, [isSmsSyncing, refreshSyncState]);
+
+  // NEW: SMS sync for registered SIM only (not all SIMs)
+  const syncSMSForRegisteredSim = useCallback(async (): Promise<{ success: boolean; synced: number; failed: number; message: string }> => {
+    if (isSmsSyncing) {
+      return {
+        success: false,
+        synced: 0,
+        failed: 0,
+        message: 'SMS sync already in progress',
+      };
+    }
+
+    setIsSmsSyncing(true);
+    setSmsSyncStatus('syncing');
+
+    try {
+      const result = await SMSService.syncForRegisteredSimOnly();
 
       if (result.success) {
         setSmsSyncStatus('success');
@@ -369,6 +411,7 @@ export const SyncProvider: React.FC<SyncProviderProps> = ({ children }) => {
     smsSyncStatus,
     sync,
     syncSMS,
+    syncSMSForRegisteredSim,
     resetSmsSyncLock,
     setSyncInterval,
     setAutoSyncEnabled,

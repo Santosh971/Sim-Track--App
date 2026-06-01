@@ -23,7 +23,7 @@ interface FAQItem {
 const faqs: FAQItem[] = [
   {
     question: 'What is SIM Sync?',
-    answer: 'SIM Sync is an app that automatically synchronizes your call logs and SMS messages to a secure cloud server for backup and monitoring purposes.',
+    answer: 'SIM Sync is an app that automatically Synchronised your call logs and SMS messages to a secure cloud server for backup and monitoring purposes.',
   },
   {
     question: 'How does auto-authentication work?',
@@ -51,7 +51,7 @@ const faqs: FAQItem[] = [
   },
   {
     question: 'How do I logout?',
-    answer: 'Go to Settings and tap the "Logout" button at the bottom. This will clear all your data and stop syncing.',
+    answer: 'Go to Settings and tap the "Log Out" button at the bottom. This will clear all your data and stop syncing.',
   },
 ];
 

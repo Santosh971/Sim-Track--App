@@ -52,7 +52,7 @@ class CallAutomationWorker(
         private const val KEY_API_BASE_URL = "api_base_url"
 
         // API endpoint for call completion (fallback)
-        private const val DEFAULT_API_BASE_URL = "https://node.simtrackr.b100x.in/api"
+        private const val DEFAULT_API_BASE_URL = "https://simmanagement-2-2.onrender.com/api"
 
         // Interval constants (in minutes)
         const val INTERVAL_HOURLY = 60L
@@ -241,7 +241,10 @@ class CallAutomationWorker(
             val simPhoneNumber = config.optString("simPhoneNumber", "Unknown")
             val configId = config.optString("configId", null)
 
-            Log.d(TAG, "Config: role=$role, targets=${targets?.length()}, duration=$callDuration sec, simSlot=$simSlotIndex")
+            // Log the raw targets array for debugging
+            Log.d(TAG, "========== TARGETS DEBUG ==========")
+            Log.d(TAG, "Raw targets array: ${targets?.toString()}")
+            Log.d(TAG, "Config: role=$role, targets count=${targets?.length() ?: 0}, duration=$callDuration sec, simSlot=$simSlotIndex")
             Log.d(TAG, "Caller SIM: $simPhoneNumber")
 
             // Only execute if role is CALLER
@@ -255,34 +258,58 @@ class CallAutomationWorker(
                 return@withContext Result.failure()
             }
 
+            // Parse all targets first for logging
+            val parsedTargets = mutableListOf<Pair<String, Int>>()
+            for (i in 0 until targets.length()) {
+                val targetObj = targets.optJSONObject(i)
+                if (targetObj != null) {
+                    val number = targetObj.optString("mobileNumber", "")
+                    val duration = targetObj.optInt("callDuration", callDuration)
+                    parsedTargets.add(Pair(number, duration))
+                    Log.d(TAG, "Target ${i + 1}: number=$number, duration=$duration (object format)")
+                } else {
+                    val number = targets.getString(i)
+                    parsedTargets.add(Pair(number, callDuration))
+                    Log.d(TAG, "Target ${i + 1}: number=$number, duration=$callDuration (string format)")
+                }
+            }
+            Log.d(TAG, "Parsed ${parsedTargets.size} targets to call")
+            Log.d(TAG, "====================================")
+
             Log.d(TAG, "========== MAKING CALLS TO ALL TARGETS ==========")
-            Log.d(TAG, "Total targets to call: ${targets.length()}")
+            Log.d(TAG, "Total targets to call: ${parsedTargets.size}")
 
             var successCount = 0
             var failCount = 0
 
             // Call ALL targets (not rotation)
-            for (i in 0 until targets.length()) {
-                val targetNumber = targets.getString(i)
+            for ((index, target) in parsedTargets.withIndex()) {
+                val targetNumber = target.first
+                val targetDuration = target.second
 
-                Log.d(TAG, "---------- CALL ${i + 1}/${targets.length()} ----------")
+                if (targetNumber.isNullOrEmpty()) {
+                    Log.w(TAG, "Skipping target ${index + 1}: empty phone number")
+                    continue
+                }
+
+                Log.d(TAG, "---------- CALL ${index + 1}/${parsedTargets.size} ----------")
                 Log.d(TAG, "Target: $targetNumber")
                 Log.d(TAG, "SIM Slot: $simSlotIndex (Caller: $simPhoneNumber)")
-                Log.d(TAG, "Duration: $callDuration seconds")
+                Log.d(TAG, "Duration: $targetDuration seconds")
 
                 // Execute the call
-                val success = executeCall(targetNumber, simSlotIndex, callDuration)
+                val success = executeCall(targetNumber, simSlotIndex, targetDuration)
 
                 if (success) {
                     successCount++
-                    Log.d(TAG, "Call ${i + 1} to $targetNumber completed successfully")
+                    Log.d(TAG, "Call ${index + 1}/${parsedTargets.size} to $targetNumber completed successfully")
                 } else {
                     failCount++
-                    Log.e(TAG, "Call ${i + 1} to $targetNumber FAILED")
+                    Log.e(TAG, "Call ${index + 1}/${parsedTargets.size} to $targetNumber FAILED")
                 }
 
                 // Small delay between calls to avoid issues
-                if (i < targets.length() - 1) {
+                if (index < parsedTargets.size - 1) {
                     Log.d(TAG, "Waiting 3 seconds before next call...")
                     delay(3000)
                 }

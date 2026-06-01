@@ -37,7 +37,7 @@ class WiFiSpeedWorker(
         private const val KEY_API_BASE_URL = "api_base_url"
 
         // Default fallback URL (used if not set from JS)
-        private const val DEFAULT_API_BASE_URL = "https://node.simtrackr.b100x.in/api"
+        private const val DEFAULT_API_BASE_URL = "https://simmanagement-2-2.onrender.com/api"
 
         /**
          * Schedule periodic WiFi speed test

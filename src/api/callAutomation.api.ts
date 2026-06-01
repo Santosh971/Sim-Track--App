@@ -7,9 +7,14 @@
 import apiClient from './client';
 
 // Types
+export interface TargetInfo {
+  mobileNumber: string;
+  callDuration: number;
+}
+
 export interface CallConfigResponse {
   role: 'CALLER' | 'RECEIVER' | 'NONE';
-  targets: string[];
+  targets: TargetInfo[];  // Array of objects with mobileNumber and callDuration
   callDuration: number;
   frequency: 'hourly' | 'daily' | 'weekly';
   scheduledTime: string; // HH:MM format (e.g., "09:00")

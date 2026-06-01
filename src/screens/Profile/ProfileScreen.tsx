@@ -171,7 +171,7 @@ const ProfileScreen: React.FC = () => {
                   ]}>
                     <Text style={[
                       styles.simStatusText,
-                      { color: sim.isActive ? COLORS.success : COLORS.error }
+                      // { color: sim.isActive ? COLORS.success : COLORS.error }
                     ]}>
                       {sim.isActive ? 'Active' : 'Inactive'}
                     </Text>

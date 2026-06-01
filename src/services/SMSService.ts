@@ -262,7 +262,7 @@ export const SMSService = {
         failed: totalFailed,
         message: hasErrors
           ? `Synced ${totalSynced} SMS, ${totalFailed} failed`
-          : `Successfully synced ${totalSynced} SMS messages`,
+          : `Successfully synced  SMS messages`,
       };
     } catch (error: any) {
       console.error('[SMSService] ========== SMS SYNC ERROR ==========');
@@ -356,7 +356,7 @@ export const SMSService = {
         failed: hasError ? messages.length - totalSynced : 0,
         message: hasError
           ? `Sync failed: ${errorMessage}`
-          : `Successfully synced ${totalSynced} SMS messages`,
+          : `Successfully synced  SMS messages`,
       };
     } catch (error: any) {
       console.error(`[SMSService] ========== SYNC ERROR ==========`);
@@ -413,7 +413,7 @@ export const SMSService = {
         failed: totalFailed,
         message: hasError
           ? `Partially synced: ${totalSynced} success, ${totalFailed} failed`
-          : `Successfully synced ${totalSynced} SMS messages`,
+          : `Successfully synced SMS messages`,
       };
     } catch (error: any) {
       console.error(`[SMSService] Sync messages error:`, error);
@@ -472,6 +472,220 @@ export const SMSService = {
     if (diffDays < 7) return `${diffDays} day${diffDays > 1 ? 's' : ''} ago`;
 
     return date.toLocaleDateString();
+  },
+
+  /**
+   * NEW: Sync SMS only for the registered/authenticated SIM
+   * This function gets the registered SIM number from WiFi or Call Automation
+   * and syncs SMS only for that specific SIM, not all SIMs.
+   *
+   * @returns Promise<SMSSyncResult> - Result of the sync operation
+   */
+  async syncForRegisteredSimOnly(): Promise<SMSSyncResult> {
+    console.log('[SMSService] ========== SYNC FOR REGISTERED SIM ONLY ==========');
+
+    // Check if sync is already in progress
+    const now = Date.now();
+    if (isSyncInProgress) {
+      const lockAge = now - syncLockTime;
+      if (lockAge < 60000) {
+        console.log('[SMSService] Sync already in progress, skipping...');
+        return {
+          success: false,
+          synced: 0,
+          failed: 0,
+          message: 'SMS sync already in progress. Please wait.',
+        };
+      } else {
+        // Lock is stale, reset it
+        isSyncInProgress = false;
+        syncLockTime = 0;
+      }
+    }
+
+    try {
+      // Acquire sync lock
+      isSyncInProgress = true;
+      syncLockTime = Date.now();
+
+      // Check permissions
+      const permissions = await this.checkPermissions();
+      if (!permissions.readSms) {
+        console.error('[SMSService] READ_SMS permission NOT granted');
+        isSyncInProgress = false;
+        syncLockTime = 0;
+        return {
+          success: false,
+          synced: 0,
+          failed: 0,
+          message: 'READ_SMS permission not granted. Grant SMS permission in app settings.',
+        };
+      }
+
+      // Step 1: Get the registered SIM number
+      const registeredSimNumber = await this.getRegisteredSimNumber();
+
+      if (!registeredSimNumber) {
+        console.log('[SMSService] No registered SIM found, falling back to sync all SIMs');
+        isSyncInProgress = false;
+        syncLockTime = 0;
+        // Fallback to regular sync if no registered SIM
+        return this.sync();
+      }
+
+      console.log('[SMSService] Registered SIM number:', registeredSimNumber);
+
+      // Step 2: Verify this SIM is in matched SIMs
+      const matchedSIMs = await SIMManager.getMatchedSIMs();
+      const registeredSIM = matchedSIMs.find(
+        sim => this.normalizePhoneNumber(sim.phoneNumber) === this.normalizePhoneNumber(registeredSimNumber)
+      );
+
+      if (!registeredSIM) {
+        console.warn('[SMSService] Registered SIM not found in matched SIMs');
+        console.log('[SMSService] Available matched SIMs:', matchedSIMs.map(s => s.phoneNumber));
+        isSyncInProgress = false;
+        syncLockTime = 0;
+        return {
+          success: false,
+          synced: 0,
+          failed: 0,
+          message: 'Registered SIM not found in device. Please re-authenticate.',
+        };
+      }
+
+      if (!registeredSIM.isActive) {
+        console.warn('[SMSService] Registered SIM is not active');
+        isSyncInProgress = false;
+        syncLockTime = 0;
+        return {
+          success: false,
+          synced: 0,
+          failed: 0,
+          message: 'Registered SIM is not active.',
+        };
+      }
+
+      console.log('[SMSService] Syncing SMS for registered SIM only:', registeredSIM.phoneNumber);
+
+      // Step 3: Sync only for the registered SIM
+      const result = await this.syncBySimNumber(registeredSIM.phoneNumber);
+
+      // Release sync lock
+      isSyncInProgress = false;
+      syncLockTime = 0;
+
+      return result;
+
+    } catch (error: any) {
+      console.error('[SMSService] Sync for registered SIM error:', error);
+      isSyncInProgress = false;
+      syncLockTime = 0;
+
+      return {
+        success: false,
+        synced: 0,
+        failed: 0,
+        message: 'Failed to sync SMS: ' + (error?.message || 'Unknown error'),
+        error: error?.message,
+      };
+    }
+  },
+
+  /**
+   * Get the registered/authenticated SIM number
+   * Checks WiFi authentication first, then Call Automation
+   *
+   * @returns Promise<string | null> - The registered SIM number or null if not found
+   */
+  async getRegisteredSimNumber(): Promise<string | null> {
+    try {
+      // First, try to get from WiFi authentication
+      const wifiSimNumber = await this.getWifiRegisteredSim();
+      if (wifiSimNumber) {
+        console.log('[SMSService] Found registered SIM from WiFi:', wifiSimNumber);
+        return wifiSimNumber;
+      }
+
+      // Second, try to get from Call Automation
+      const callAutoSimNumber = await this.getCallAutomationSim();
+      if (callAutoSimNumber) {
+        console.log('[SMSService] Found registered SIM from Call Automation:', callAutoSimNumber);
+        return callAutoSimNumber;
+      }
+
+      console.log('[SMSService] No registered SIM found from WiFi or Call Automation');
+      return null;
+
+    } catch (error: any) {
+      console.error('[SMSService] Error getting registered SIM:', error);
+      return null;
+    }
+  },
+
+  /**
+   * Get registered SIM from WiFi authentication
+   */
+  async getWifiRegisteredSim(): Promise<string | null> {
+    try {
+      // Import WiFiService dynamically to avoid circular dependency
+      const { WiFiService } = require('./WiFiService');
+      const selectedSim = await WiFiService.getSelectedSimData();
+
+      if (selectedSim && selectedSim.simNumber) {
+        console.log('[SMSService] WiFi registered SIM:', selectedSim.simNumber);
+        return selectedSim.simNumber;
+      }
+
+      return null;
+    } catch (error: any) {
+      console.log('[SMSService] No WiFi registered SIM:', error.message);
+      return null;
+    }
+  },
+
+  /**
+   * Get registered SIM from Call Automation
+   */
+  async getCallAutomationSim(): Promise<string | null> {
+    try {
+      // Import CallAutomationService dynamically to avoid circular dependency
+      const CallAutomationService = require('./CallAutomationService').default;
+      const status = await CallAutomationService.getStatus();
+
+      if (status && status.simPhoneNumber) {
+        console.log('[SMSService] Call Automation SIM:', status.simPhoneNumber);
+        return status.simPhoneNumber;
+      }
+
+      return null;
+    } catch (error: any) {
+      console.log('[SMSService] No Call Automation SIM:', error.message);
+      return null;
+    }
+  },
+
+  /**
+   * Normalize phone number for comparison
+   */
+  normalizePhoneNumber(phoneNumber: string | null): string {
+    if (!phoneNumber) return '';
+
+    // Remove all non-numeric characters
+    let cleaned = phoneNumber.replace(/[^0-9]/g, '');
+
+    // Remove leading country code
+    if (cleaned.length > 10) {
+      if (cleaned.startsWith('91') && cleaned.length === 12) {
+        cleaned = cleaned.substring(2);
+      } else if (cleaned.startsWith('1') && cleaned.length === 11) {
+        cleaned = cleaned.substring(1);
+      } else {
+        cleaned = cleaned.slice(-10);
+      }
+    }
+
+    return cleaned;
   },
 
   /**

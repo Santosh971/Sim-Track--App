@@ -184,7 +184,7 @@ export interface WiFiContextValue {
   error: string | null;
   isCurrentWifiRegistered: boolean | null;
   currentWifiSSID: string | null;
-  initialize: (companyId: string) => Promise<void>;
+  initialize: (companyId: string, preferredSimNumber?: string) => Promise<void>;
   reinitialize: (companyId: string) => Promise<void>;
   startMonitoring: () => void;
   stopMonitoring: () => void;

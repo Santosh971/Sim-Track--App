@@ -42,7 +42,7 @@ class SyncForegroundService : Service() {
         private const val KEY_API_BASE_URL = "api_base_url"
 
         // Default fallback URL
-        private const val DEFAULT_API_BASE_URL = "https://node.simtrackr.b100x.in/api"
+        private const val DEFAULT_API_BASE_URL = "https://simmanagement-2-2.onrender.com/api"
 
         private var isRunning = false
         private var syncIntervalMinutes: Int = 5 // Default 5 minutes

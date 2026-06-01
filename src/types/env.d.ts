@@ -6,7 +6,7 @@
 declare module '@env' {
   /**
    * Backend API Base URL
-   * @example 'https://node.simtrackr.b100x.in/api'
+   * @example 'https://simmanagement-2-2.onrender.com/api'
    */
   export const API_BASE_URL: string;
 }
